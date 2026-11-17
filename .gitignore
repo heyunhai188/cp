@@ -1,0 +1,8 @@
+node_modules/
+web/node_modules/
+web/dist/
+data/*.sqlite
+data/*.sqlite-*
+data/admin-initial.txt
+.env
+*.log

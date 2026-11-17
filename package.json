@@ -1,0 +1,14 @@
+{
+  "name": "fc3d-stats",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "build": "npm --prefix web install && npm --prefix web run build",
+    "dev": "npm --prefix web run dev",
+    "test": "node --test"
+  }
+}

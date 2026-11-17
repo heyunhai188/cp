@@ -1,0 +1,280 @@
+<script setup>
+import { computed, onMounted, ref } from "vue";
+import { request } from "../api.js";
+import { session } from "../session.js";
+import { LOTTERIES, currentLottery, currentRange } from "../lottery.js";
+import { clampN, formatStamp } from "../format.js";
+import Balls from "../components/Balls.vue";
+
+const presets = [30, 50, 100, 200, 500];
+const lottery = ref(currentLottery());
+const n = ref(currentRange());
+const rangeText = ref(String(n.value));
+const k = ref(localStorage.getItem(`predict.k.${lottery.value}`) || "");
+const data = ref(null);
+const note = ref("");
+const error = ref("");
+const replacing = ref(false);
+const checksN = ref(Number(localStorage.getItem(`predict.checksN.${lottery.value}`)) || 30);
+const expandedCheck = ref("");
+
+function compoundLine(group) {
+  if (!group) return "";
+  return group.positions.map((position) => `${position.name} ${position.digits.join("")}`).join(" / ");
+}
+
+function remember() {
+  localStorage.setItem("lottery.code", lottery.value);
+  localStorage.setItem(`range.${lottery.value}`, String(n.value));
+}
+
+async function load() {
+  const params = new URLSearchParams({ lottery: lottery.value, n: String(n.value), checksN: String(checksN.value) });
+  if (String(k.value).trim()) params.set("k", String(k.value).trim());
+  try {
+    const next = await request(`/api/predict?${params}`);
+    error.value = "";
+    data.value = next;
+    k.value = String(next.k);
+    localStorage.setItem(`predict.k.${lottery.value}`, String(next.k));
+    if (!next.window) {
+      note.value = "还没有开奖。先到规则统计页同步近 500 期。";
+      return;
+    }
+    const latest = next.latest;
+    note.value = `${next.lottery.name} 近 ${next.window} 期。最新 ${latest.issue} ${latest.digits.join("")}。每位取 ${next.k} 个号。`;
+  } catch (err) {
+    error.value = err.message || "预测失败";
+  }
+}
+
+function switchLottery(code) {
+  if (code === lottery.value) return;
+  remember();
+  lottery.value = code;
+  n.value = currentRange(code);
+  rangeText.value = String(n.value);
+  k.value = localStorage.getItem(`predict.k.${code}`) || "";
+  localStorage.setItem("lottery.code", code);
+  load();
+}
+
+function setN(value) {
+  n.value = value === "all" ? 5000 : clampN(value);
+  rangeText.value = String(n.value);
+  remember();
+  load();
+}
+
+function commitRange() {
+  n.value = clampN(rangeText.value);
+  rangeText.value = String(n.value);
+  remember();
+  load();
+}
+
+const archiveView = () => {
+  const current = data.value;
+  const archive = current?.archive;
+  const saved = archive?.payload;
+  if (!current || !archive || !saved) return null;
+  const liveKey = (current.joint?.directs || []).map((item) => item.digits.join("")).join("|");
+  const savedKey = (saved.jointDirects || []).map((item) => item.digits.join("")).join("|");
+  return {
+    archive,
+    saved,
+    differs: archive.n !== current.n || archive.k !== current.k || liveKey !== savedKey,
+  };
+};
+// 固定一次存档快照，避免模板重复调用时请求状态更新造成空值读取。
+const currentArchive = computed(archiveView);
+
+function drawnChecks() {
+  return (data.value?.checks || []).filter((item) => item.status === "drawn");
+}
+
+function setChecksN(value) {
+  checksN.value = Number(value) || 30;
+  localStorage.setItem(`predict.checksN.${lottery.value}`, String(checksN.value));
+  expandedCheck.value = "";
+  load();
+}
+
+function rate(pick) {
+  const drawn = drawnChecks();
+  const hits = drawn.filter(pick).length;
+  return drawn.length ? `${hits}/${drawn.length}` : "还没有";
+}
+
+async function replaceForecast() {
+  if (!session.user?.canOperate || replacing.value) return;
+  replacing.value = true;
+  try {
+    await request("/api/forecasts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lottery: lottery.value,
+        n: n.value,
+        k: String(k.value).trim(),
+      }),
+    });
+    await load();
+  } catch (err) {
+    error.value = err.message || "保存失败";
+  } finally {
+    replacing.value = false;
+  }
+}
+
+onMounted(load);
+</script>
+
+<template>
+  <p v-if="error" class="banner">{{ error }}</p>
+  <header class="page-hero">
+    <p class="eyebrow">按历史排序的候选号</p>
+    <h1>号码预测</h1>
+    <p class="lede">近 {{ n }} 期加权排序 · 每位 {{ k || "默认" }} 个。历史排序仅供参考，不代表提高中奖概率。</p>
+    <div class="lottery-switch">
+      <button
+        v-for="item in LOTTERIES"
+        :key="item.code"
+        type="button"
+        class="btn ghost small"
+        :class="{ on: item.code === lottery }"
+        @click="switchLottery(item.code)"
+      >{{ item.name }}</button>
+    </div>
+  </header>
+  <section class="panel predict-controls">
+    <details class="fold predict-options"><summary>设置 · 近 {{ n }} 期 · 每位 {{ k || "默认" }} 个</summary>
+    <div class="range-row"><span>近</span><input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @change="commitRange" /><span>期</span></div>
+    <div class="presets">
+      <button v-for="value in presets" :key="value" class="btn ghost small" type="button" @click="setN(value)">{{ value }}</button>
+      <button class="btn ghost small" type="button" @click="setN('all')">全部</button>
+    </div>
+    <div class="range-row">
+      <span>每位</span>
+      <input v-model="k" inputmode="numeric" aria-label="每位取号个数" @change="load" />
+      <span>个号，最多 5 个</span>
+    </div>
+    </details>
+  </section>
+  <p class="quiet">{{ note }}</p>
+
+  <template v-if="data?.window">
+    <details v-if="currentArchive" class="panel fold archive-card">
+      <summary>本期预测存档 · {{ currentArchive.archive.basedIssue }} 期后</summary>
+      <h2>本期存档</h2>
+      <p>依据 {{ currentArchive.archive.basedIssue }} 预测下一期。近 {{ currentArchive.archive.n }} 期，每位 {{ currentArchive.archive.k }} 个号。保存于 {{ formatStamp(currentArchive.archive.createdAt) }}。开出下一期并同步后，这份就不能再改。</p>
+      <p class="compound">综合直选 {{ (currentArchive.saved.jointDirects || []).map((item) => item.digits.join("")).join("、") }}</p>
+      <p class="compound">{{ compoundLine(currentArchive.saved.jointCompound) }}</p>
+      <p class="quiet">热号直选 {{ (currentArchive.saved.hotDirects || []).map((item) => `${item.name} ${item.digits.join("")}`).join("、") }}</p>
+      <p v-if="currentArchive.differs && session.user?.canOperate" class="hint">当前页面和存档不一致。覆盖后，今晚核对按现在这份。</p>
+      <button v-if="session.user?.canOperate" class="btn gold" type="button" :disabled="replacing" @click="replaceForecast">用当前预测覆盖</button>
+    </details>
+
+    <details v-if="drawnChecks().length" class="panel fold predict-block">
+      <summary>开奖核对 · 综合直选 {{ rate((item) => item.grade.jointDirects.length) }} · 综合复式 {{ rate((item) => item.grade.jointCompound) }}</summary>
+      <p class="hint">综合直选 {{ rate((item) => item.grade.jointDirects.length) }} · 综合复式 {{ rate((item) => item.grade.jointCompound) }} · 冷热直选 {{ rate((item) => item.grade.hotDirects.length) }} · 热号复式 {{ rate((item) => item.grade.hotCompound) }} · 冷号复式 {{ rate((item) => item.grade.coldCompound) }}</p>
+      <label class="check-window">核对最近
+        <select :value="checksN" @change="setChecksN($event.target.value)">
+          <option v-for="count in [10, 30, 50, 100, 200, 500]" :key="count" :value="count">{{ count }} 期</option>
+        </select>
+        <span class="quiet">（最多 {{ drawnChecks().length }} 期有开奖记录）</span>
+      </label>
+      <p class="quiet">表格可以左右滑动。</p>
+      <div class="panel query-table">
+        <table>
+          <thead>
+            <tr><th>依据</th><th>开奖</th><th>号码</th><th>综合直选</th><th>综合复式</th><th>冷热直选</th><th>热号复式</th><th>冷号复式</th><th>详情</th></tr>
+          </thead>
+          <tbody>
+            <template v-for="item in drawnChecks()" :key="item.basedIssue">
+              <tr>
+                <td>{{ item.basedIssue }}</td>
+                <td>{{ item.resultIssue }} {{ item.resultDate }}</td>
+                <td>{{ item.resultDigits.join("") }}</td>
+                <td><b v-if="item.grade.jointDirects.length" class="hit">中 {{ item.grade.jointDirects.join("、") }}</b><template v-else>未中</template></td>
+                <td><b v-if="item.grade.jointCompound" class="hit">中</b><template v-else>未中</template></td>
+                <td><b v-if="item.grade.hotDirects.length" class="hit">中 {{ item.grade.hotDirects.join("、") }}</b><template v-else>未中</template></td>
+                <td><b v-if="item.grade.hotCompound" class="hit">中</b><template v-else>未中</template></td>
+                <td><b v-if="item.grade.coldCompound" class="hit">中</b><template v-else>未中</template></td>
+                <td><button class="text-btn" type="button" @click="expandedCheck = expandedCheck === item.basedIssue ? '' : item.basedIssue">{{ expandedCheck === item.basedIssue ? "收起" : "号码" }}</button></td>
+              </tr>
+              <tr v-if="expandedCheck === item.basedIssue">
+                <td colspan="9"><div class="forecast-snapshot">
+                  <section><b>综合复式</b><p>{{ compoundLine(item.payload.jointCompound) || "无" }} · {{ item.payload.jointCompound?.bets || 0 }} 注</p></section>
+                  <section><b>热号复式</b><p>{{ compoundLine(item.payload.hotCompound) || "无" }} · {{ item.payload.hotCompound?.bets || 0 }} 注</p></section>
+                  <section><b>冷号复式</b><p>{{ compoundLine(item.payload.coldCompound) || "无" }} · {{ item.payload.coldCompound?.bets || 0 }} 注</p></section>
+                  <section><b>综合直选（{{ item.payload.jointDirects?.length || 0 }} 组）</b><p>{{ (item.payload.jointDirects || []).map((pick) => `${pick.name} ${pick.digits.join("")}`).join("、") || "无" }}</p></section>
+                <section><b>冷热直选</b><p>{{ (item.payload.hotDirects || []).map((pick) => `${pick.name} ${pick.digits.join("")}`).join("、") || "无" }}</p></section>
+              </div></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </details>
+    <details v-else class="panel fold archive-card">
+      <summary>开奖核对</summary>
+      <h2>开奖核对</h2>
+      <p class="quiet">还没有可核对的存档。下一期开出并点同步之后，这里会列出综合、冷热各套规则中没中。</p>
+    </details>
+
+    <section class="predict-block">
+      <h2>复式推荐</h2>
+      <article v-if="data.joint?.compound" class="panel compound-pick">
+        <h2>综合复式 · {{ data.joint.compound.bets }} 注</h2>
+        <p class="compound">{{ compoundLine(data.joint.compound) }}</p>
+      </article>
+      <div class="predict-compounds">
+        <article v-if="data.hotCompound" class="panel"><h3>热号复式 · {{ data.hotCompound.bets }} 注</h3><p class="compound">{{ compoundLine(data.hotCompound) }}</p></article>
+        <article v-if="data.coldCompound" class="panel"><h3>冷号复式 · {{ data.coldCompound.bets }} 注</h3><p class="compound">{{ compoundLine(data.coldCompound) }}</p></article>
+      </div>
+    </section>
+    <section class="predict-block">
+      <h2>直选结果</h2>
+      <p class="hint">综合直选与冷热直选。号码为历史排序结果，不代表提高中奖概率。</p>
+      <div class="predict-tickets">
+        <article v-for="item in data.joint?.directs || []" :key="item.name + item.digits.join('')" class="panel predict-ticket"><h2>{{ item.name }}</h2><Balls :digits="item.digits" /><p class="quiet">{{ item.parity }} · 和值 {{ item.sum }} · 跨度 {{ item.span }}<template v-if="item.seen"> · 近窗出现过</template></p></article>
+        <article v-for="item in data.directs || []" :key="`hot-${item.name}`" class="panel predict-ticket"><h2>冷热 · {{ item.name }}</h2><Balls :digits="item.digits" /><p class="quiet">{{ item.digits.join("") }}</p></article>
+      </div>
+    </section>
+    <details class="panel fold predict-block">
+      <summary>冷热对照与位置统计</summary>
+      <h2>冷热对照</h2>
+      <p class="hint">只按单个位置的冷热来组，不看整注形态。</p>
+      <div class="predict-tickets">
+        <article v-for="item in data.directs" :key="item.name" class="panel predict-ticket">
+          <h2>{{ item.name }}</h2>
+          <Balls :digits="item.digits" />
+          <p class="quiet">{{ item.digits.join("") }}</p>
+        </article>
+      </div>
+    </details>
+    <details class="panel fold predict-block">
+      <summary>每个位置的冷热频次</summary>
+      <div class="predict-ranks">
+        <section v-for="position in data.positions" :key="position.name" class="panel">
+          <h2>{{ position.name }}</h2>
+          <table>
+            <thead>
+              <tr><th>号码</th><th>近 {{ data.window }} 期</th><th>当前遗漏</th><th>热号</th><th>冷号</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in position.digits" :key="item.digit">
+                <td>{{ item.digit }}</td>
+                <td>{{ item.count }}</td>
+                <td>{{ item.omission === null ? "未出现" : item.omission }}</td>
+                <td>{{ item.hotRank <= data.k ? "取" : "" }}</td>
+                <td>{{ item.coldRank <= data.k ? "取" : "" }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </details>
+  </template>
+</template>
