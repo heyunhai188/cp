@@ -1,10 +1,28 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { request } from "../api.js";
 import { session } from "../session.js";
+import { LOTTERIES } from "../lottery.js";
+import SectionTabs from "../components/SectionTabs.vue";
 
 const router = useRouter();
+const route = useRoute();
+const PANES = [
+  { id: "users", label: "账号", hash: "#users" },
+  { id: "roles", label: "角色", hash: "#roles" },
+  { id: "clear", label: "清理", hash: "#clear-data" },
+];
+function paneFromHash(hash) {
+  return PANES.find((item) => item.hash === hash)?.id || "users";
+}
+const pane = ref(paneFromHash(route.hash));
+watch(() => route.hash, (hash) => { pane.value = paneFromHash(hash); });
+function showPane(id) {
+  const next = PANES.find((item) => item.id === id);
+  pane.value = next.id;
+  if (route.hash !== next.hash) router.replace({ hash: next.hash });
+}
 const roles = ref([]);
 const users = ref([]);
 const summary = ref(null);
@@ -23,6 +41,14 @@ const clearStep = ref(0);
 const clearPhrase = ref("");
 const clearing = ref(false);
 const clearResult = ref("");
+const trimLottery = ref("fc3d");
+const trimCount = ref("500");
+const trimOpen = ref(false);
+const trimStep = ref(0);
+const trimPhrase = ref("");
+const trimming = ref(false);
+const trimResult = ref("");
+const trimPhraseText = "删除最旧开奖";
 const resetTarget = ref(null);
 const resetPasswordShown = ref("");
 const resetting = ref(false);
@@ -37,6 +63,12 @@ const dataGroups = [
   { id: "draws", title: "开奖与同步历史", description: "删除三个彩种的本地开奖记录、同步日志和官网期数缓存。预测核对依赖开奖期号；建议先清预测存档。需要时可重新从官网同步。", phrase: "清空开奖记录", count: (data) => `${data.draws} 期` },
 ];
 
+const trimTarget = computed(() => summary.value?.drawsByLottery?.find((item) => item.code === trimLottery.value) || null);
+const trimPeriods = computed(() => {
+  const number = Number(trimCount.value);
+  return Number.isInteger(number) ? number : 0;
+});
+const trimRemaining = computed(() => Math.max(0, (trimTarget.value?.count || 0) - trimPeriods.value));
 const assignableRoles = computed(() => roles.value.filter((role) => !role.canManage));
 const roleTaken = (name) => roles.value.some((role) => role.name === name);
 const openRoleType = computed(() => roleNames.find((name) => !roleTaken(name)) || "");
@@ -97,6 +129,23 @@ async function addUser() {
     username.value = "";
     password.value = "";
     await load();
+  } catch (err) {
+    error.value = err.message || "操作失败";
+  }
+}
+
+async function toggleRecommend(user) {
+  error.value = "";
+  try {
+    const result = await request(`/api/admin/users/${user.id}/recommend`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: !user.canRecommend }),
+    });
+    const index = users.value.findIndex((item) => item.id === user.id);
+    if (index >= 0) users.value[index] = result.user;
+    if (session.user?.id === user.id) session.user.canRecommend = result.user.canRecommend;
+    notice.value = `${result.user.username}的专家推荐已${result.user.canRecommend ? "开启" : "关闭"}`;
   } catch (err) {
     error.value = err.message || "操作失败";
   }
@@ -188,6 +237,41 @@ function closeClear() {
   clearPhrase.value = "";
 }
 
+function beginTrim() {
+  error.value = "";
+  trimResult.value = "";
+  trimPhrase.value = "";
+  trimStep.value = 1;
+  trimOpen.value = true;
+}
+
+function closeTrim() {
+  if (trimming.value) return;
+  trimOpen.value = false;
+  trimStep.value = 0;
+  trimPhrase.value = "";
+}
+
+async function executeTrim() {
+  if (trimPhrase.value !== trimPhraseText || trimming.value) return;
+  trimming.value = true;
+  error.value = "";
+  try {
+    const result = await request("/api/admin/draws-trim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lottery: trimLottery.value, count: trimPeriods.value, confirmation: trimPhrase.value }),
+    });
+    summary.value = result.summary;
+    trimResult.value = `已删除${result.name}最旧的 ${result.removed} 期，还剩 ${result.remaining} 期。`;
+    notice.value = trimResult.value;
+  } catch (err) {
+    error.value = err.message || "清理失败";
+  } finally {
+    trimming.value = false;
+  }
+}
+
 async function executeClear() {
   if (!selectedClear.value || clearPhrase.value !== selectedClear.value.phrase || clearing.value) return;
   clearing.value = true;
@@ -224,14 +308,11 @@ onMounted(async () => {
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
   <p v-if="notice" class="admin-notice" role="status">{{ notice }}</p>
-  <header class="page-hero admin-hero">
-    <p class="eyebrow">超级管理员控制台</p>
-    <h1>用户与数据管理</h1>
-    <p class="lede">超级管理员账号固定唯一。普通管理员可以操作网站数据，但用户、角色和清理功能仅限超级管理员。</p>
-    <RouterLink class="btn ghost" to="/play-admin">试玩管理：余额、订单和截止时间</RouterLink>
-  </header>
+  <SectionTabs :tabs="PANES" :model-value="pane" @update:model-value="showPane" />
+  <p class="quiet">账号、角色和清理分开。清理仍要二次确认，不能从这里直接删掉。</p>
+  <RouterLink class="btn ghost small" to="/play-admin">试玩管理</RouterLink>
 
-  <section id="roles" class="panel admin-section">
+  <section v-if="pane === 'roles'" id="roles" class="panel admin-section">
     <div class="admin-section-head"><div><h2>角色权限</h2><p class="quiet">管理员可操作同步、统计规则和预测；查询角色默认只读。试玩权限可单独开关。</p></div><span class="admin-count">{{ roles.length }} 个角色</span></div>
     <div class="role-list">
       <article v-for="role in roles" :key="role.id" class="role-card">
@@ -256,7 +337,7 @@ onMounted(async () => {
     </details>
   </section>
 
-  <section id="users" class="panel admin-section">
+  <section v-if="pane === 'users'" id="users" class="panel admin-section">
     <div class="admin-section-head"><div><h2>用户账号</h2><p class="quiet">创建账号、按账号或角色筛选，并查看试玩权限和余额。</p></div><span class="admin-count">{{ users.length }} 个用户</span></div>
     <details class="admin-add-panel">
       <summary>添加用户</summary>
@@ -272,16 +353,38 @@ onMounted(async () => {
     <div class="user-list">
       <article v-for="user in filteredUsers" :key="user.id" class="user-card">
         <div class="user-card-main"><strong>{{ user.username }}</strong><span v-if="user.id === session.user?.id" class="admin-badge">当前账号</span><span v-if="user.mustChangePassword" class="warning-chip">待改临时密码</span></div>
-        <div class="user-card-meta"><span class="role-tag">{{ user.roleName }}</span><span :class="user.canOperate ? 'permission-on' : 'permission-off'">{{ user.canOperate ? "可操作" : "只读" }}</span><span :class="user.canPlay ? 'permission-on' : 'permission-off'">{{ user.canPlay ? `试玩余额 ${user.playBalance} 元` : "无试玩权限" }}</span></div>
-        <div v-if="user.id !== session.user?.id && !user.canManage" class="user-actions"><button class="text-btn" type="button" @click="resetTarget = user; resetPasswordShown = ''">重置密码</button><button class="text-btn danger-text" type="button" @click="removeUser(user)">删除用户</button></div>
+        <div class="user-card-meta"><span class="role-tag">{{ user.roleName }}</span><span :class="user.canOperate ? 'permission-on' : 'permission-off'">{{ user.canOperate ? "可操作" : "只读" }}</span><span :class="user.canPlay ? 'permission-on' : 'permission-off'">{{ user.canPlay ? `试玩余额 ${user.playBalance} 元` : "无试玩权限" }}</span><span :class="user.canRecommend ? 'permission-on' : 'permission-off'">{{ user.canRecommend ? "专家推荐" : "非专家" }}</span></div>
+        <div class="user-actions">
+          <button class="btn ghost small" type="button" @click="toggleRecommend(user)">{{ user.canRecommend ? "关闭专家推荐" : "开启专家推荐" }}</button>
+          <template v-if="user.id !== session.user?.id && !user.canManage">
+            <button class="text-btn" type="button" @click="resetTarget = user; resetPasswordShown = ''">重置密码</button>
+            <button class="text-btn danger-text" type="button" @click="removeUser(user)">删除用户</button>
+          </template>
+        </div>
       </article>
       <p v-if="!filteredUsers.length" class="empty-hint">没有符合条件的用户。</p>
     </div>
   </section>
 
-  <section id="clear-data" class="panel admin-section clear-section">
+  <section v-if="pane === 'clear'" id="clear-data" class="panel admin-section clear-section">
     <div class="admin-section-head"><div><h2>分区清理数据</h2><p class="quiet">每类独立清理。保留超级管理员、用户角色和系统配置。</p></div><span class="warning-chip">不可撤销</span></div>
     <aside class="clear-order-hint"><strong>建议清理顺序</strong><p>模拟订单 → 预测存档 → 首页规则 → 试玩余额 → 普通用户与角色 → 开奖数据。若只清某一类，可直接单独操作。清理全部数据前建议先备份数据库。</p></aside>
+    <article v-if="summary" class="clear-card trim-card">
+      <div><h3>删除一个彩种最旧的开奖</h3><strong>保留最新开奖</strong></div>
+      <p class="quiet">适合撤销「向前补历史」。只删除所选彩种最旧的 N 期，最近的号码、预测存档和试玩订单都留着。三个彩种互不影响。</p>
+      <form class="admin-form" @submit.prevent="beginTrim">
+        <label>彩种
+          <select v-model="trimLottery">
+            <option v-for="item in LOTTERIES" :key="item.code" :value="item.code">{{ item.name }} · 现有 {{ summary.drawsByLottery?.find((row) => row.code === item.code)?.count || 0 }} 期</option>
+          </select>
+        </label>
+        <label>删除最旧
+          <input v-model="trimCount" inputmode="numeric" aria-label="删除最旧的期数" />
+        </label>
+        <button class="btn danger-btn" type="submit" :disabled="trimPeriods < 1 || trimPeriods >= (trimTarget?.count || 0)">删除这 {{ trimPeriods || 0 }} 期</button>
+      </form>
+      <p class="quiet">删除后保留最新 {{ trimRemaining }} 期。期数必须小于该彩种现有期数。</p>
+    </article>
     <div v-if="summary" class="clear-grid">
       <article v-for="group in dataGroups" :key="group.id" class="clear-card">
         <div><h3>{{ group.title }}</h3><strong>{{ group.count(summary) }}</strong></div>
@@ -305,6 +408,31 @@ onMounted(async () => {
         <p class="quiet">系统会生成一组临时密码。该用户现有登录会立刻失效，下次登录后必须修改。知道旧密码的人不能再抢先登录。</p>
         <p v-if="error" class="clear-error" role="alert">{{ error }}</p>
         <div class="modal-foot"><button class="btn ghost" type="button" :disabled="resetting" @click="resetTarget = null">取消</button><button class="btn gold" type="button" :disabled="resetting" @click="submitPasswordReset">{{ resetting ? "生成中…" : "生成临时密码" }}</button></div>
+      </template>
+    </section>
+  </div>
+
+  <div v-if="trimOpen" class="overlay admin-clear-overlay">
+    <div class="scrim" @click="closeTrim"></div>
+    <section class="modal-panel admin-clear-modal" role="dialog" aria-modal="true" aria-labelledby="trim-title">
+      <p class="eyebrow">第 {{ trimStep }} / 2 步确认</p>
+      <button class="clear-modal-close" type="button" aria-label="关闭清理确认弹框" :disabled="trimming" @click="closeTrim">×</button>
+      <h2 id="trim-title">{{ trimResult ? "清理结果" : trimStep === 1 ? "准备删除最旧开奖" : "最后确认：删除最旧开奖" }}</h2>
+      <p class="lede">删除{{ trimTarget?.name }}最旧的 {{ trimPeriods }} 期，保留最新 {{ trimRemaining }} 期。</p>
+      <p v-if="trimResult" class="clear-success" role="status">{{ trimResult }}</p>
+      <p v-if="error" class="clear-error" role="alert">{{ error }}</p>
+      <template v-if="trimResult">
+        <div class="modal-foot"><button class="btn gold" type="button" @click="closeTrim">关闭</button></div>
+      </template>
+      <template v-else-if="trimStep === 1">
+        <p class="quiet">这些旧开奖删除后不能从本机恢复，需要时可以再从官网向前补。下一步需要输入指定确认文字。</p>
+        <div class="modal-foot"><button class="btn ghost" type="button" @click="closeTrim">取消</button><button class="btn danger-btn" type="button" @click="trimStep = 2">我已核对，继续</button></div>
+      </template>
+      <template v-else>
+        <label class="clear-confirm-label">请输入 <b>{{ trimPhraseText }}</b>
+          <input v-model="trimPhrase" autocomplete="off" :placeholder="trimPhraseText" />
+        </label>
+        <div class="modal-foot"><button class="btn ghost" type="button" :disabled="trimming" @click="closeTrim">取消</button><button class="btn danger-btn" type="button" :disabled="trimming || trimPhrase !== trimPhraseText" @click="executeTrim">{{ trimming ? "清理中…" : "确认永久清理" }}</button></div>
       </template>
     </section>
   </div>

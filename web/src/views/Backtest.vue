@@ -14,6 +14,9 @@ import {
   readPrize,
 } from "../format.js";
 
+const props = defineProps({
+  embedded: { type: Boolean, default: false },
+});
 const METHOD_GROUPS = [
   { id: "compound", name: "复式", methods: [
   { id: "joint-compound", name: "综合复式" },
@@ -200,7 +203,7 @@ onMounted(load);
 
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
-  <header class="page-hero">
+  <header v-if="!props.embedded" class="page-hero">
     <p class="eyebrow">只用过去核对过去</p>
     <h1>向前回测</h1>
     <p class="lede">对比历史命中、随机理论次数和最长未中。回测结果不代表未来中奖概率。</p>
@@ -223,6 +226,7 @@ onMounted(load);
     <div class="presets">
       <button v-for="value in presets" :key="value" class="btn ghost small" type="button" @click="setN(value)">{{ value }}</button>
     </div>
+    <p class="quiet">默认 100 期，和预测用的是同一窗口。库里更早的开奖只增加可核对的期数，不改变每一期的选号范围。</p>
     <div class="range-row">
       <span>每位</span>
       <input v-model="k" inputmode="numeric" aria-label="每位取号个数" placeholder="默认" @change="load" />

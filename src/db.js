@@ -139,6 +139,20 @@ export function initDatabase() {
   ensureRoleOperateColumn();
   ensurePlayColumns();
   ensureColumn("users", "must_change_password", "must_change_password INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("users", "can_recommend", "can_recommend INTEGER NOT NULL DEFAULT 0");
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS expert_picks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      lottery_code TEXT NOT NULL,
+      based_issue TEXT NOT NULL,
+      directs TEXT NOT NULL,
+      compound TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (user_id, lottery_code, based_issue)
+    );
+  `);
   seedRules(LOTTERIES.fc3d);
   seedRules(LOTTERIES.pl3);
   seedRules(LOTTERIES.pl5);
@@ -516,6 +530,48 @@ export function listForecasts(lotteryCode, limit = 5000) {
   `).all(lotteryCode, Math.min(5000, Math.max(1, Number(limit) || 5000))).map(mapForecast);
 }
 
+const TRIM_OLDEST_PHRASE = "删除最旧开奖";
+
+// 只删一个彩种最旧的若干期，最新的开奖留着。期数必须小于现有期数，避免把这个彩种清空。
+export function trimOldestDraws(lotteryCode, count, confirmation) {
+  if (confirmation !== TRIM_OLDEST_PHRASE) {
+    const error = new Error(`二次确认文字不正确，请输入“${TRIM_OLDEST_PHRASE}”`);
+    error.status = 400;
+    throw error;
+  }
+  if (!LOTTERIES[lotteryCode]) {
+    const error = new Error("未知彩种");
+    error.status = 400;
+    throw error;
+  }
+  const periods = Number(count);
+  if (!Number.isInteger(periods) || periods < 1 || periods > 5000) {
+    const error = new Error("清理期数要在 1 到 5000 之间");
+    error.status = 400;
+    throw error;
+  }
+  const total = Number(database.prepare("SELECT COUNT(*) AS n FROM draws WHERE lottery_code = ?").get(lotteryCode).n);
+  if (periods >= total) {
+    const error = new Error(total ? `该彩种现有 ${total} 期，至少要保留最新 1 期` : "该彩种还没有开奖");
+    error.status = 400;
+    throw error;
+  }
+  const removed = database.prepare(`
+    DELETE FROM draws WHERE rowid IN (
+      SELECT rowid FROM draws
+      WHERE lottery_code = ?
+      ORDER BY draw_date ASC, issue ASC
+      LIMIT ?
+    )
+  `).run(lotteryCode, periods).changes;
+  invalidateDraws(lotteryCode);
+  return {
+    lotteryCode,
+    removed: Number(removed) || 0,
+    remaining: total - (Number(removed) || 0),
+  };
+}
+
 export function countDrawsByLottery() {
   const rows = database.prepare(`
     SELECT lottery_code, COUNT(*) AS n
@@ -545,13 +601,14 @@ function publicAccount(row) {
     canManage: admin,
     canOperate: admin || row.can_operate === 1,
     canPlay: admin || row.can_play === 1,
+    canRecommend: row.can_recommend === 1,
     playBalance: row.play_balance || 0,
     mustChangePassword: row.must_change_password === 1,
   };
 }
 
 const userSelect = `
-  SELECT u.id, u.username, u.password_hash, u.role_id, u.play_balance, u.must_change_password, u.created_at, r.name AS role_name, r.is_admin, r.can_play, r.can_operate
+  SELECT u.id, u.username, u.password_hash, u.role_id, u.play_balance, u.must_change_password, u.can_recommend, u.created_at, r.name AS role_name, r.is_admin, r.can_play, r.can_operate
   FROM users u JOIN roles r ON r.id = u.role_id
 `;
 
@@ -665,6 +722,62 @@ export function listUsers() {
   return database.prepare(`${userSelect} ORDER BY u.id`).all().map(publicAccount);
 }
 
+export function setUserRecommend(userId, enabled) {
+  const existing = database.prepare("SELECT id FROM users WHERE id = ?").get(userId);
+  if (!existing) {
+    const error = new Error("用户不存在");
+    error.status = 404;
+    throw error;
+  }
+  database.prepare("UPDATE users SET can_recommend = ? WHERE id = ?").run(enabled ? 1 : 0, userId);
+  return getAccount(userId);
+}
+
+function mapExpertPick(row) {
+  return {
+    id: Number(row.id),
+    userId: Number(row.user_id),
+    username: row.username,
+    lotteryCode: row.lottery_code,
+    basedIssue: row.based_issue,
+    directs: JSON.parse(row.directs),
+    compound: row.compound ? JSON.parse(row.compound) : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function listExpertPicks(lotteryCode) {
+  return database.prepare(`
+    SELECT p.id, p.user_id, p.lottery_code, p.based_issue, p.directs, p.compound, p.created_at, p.updated_at, u.username
+    FROM expert_picks p
+    JOIN users u ON u.id = p.user_id
+    WHERE p.lottery_code = ?
+    ORDER BY p.id
+  `).all(lotteryCode).map(mapExpertPick);
+}
+
+export function saveExpertPick({ userId, lotteryCode, basedIssue, pick }) {
+  if (!pick) {
+    database.prepare(`
+      DELETE FROM expert_picks WHERE user_id = ? AND lottery_code = ? AND based_issue = ?
+    `).run(userId, lotteryCode, basedIssue);
+    return null;
+  }
+  const stamp = nowIso();
+  const directs = JSON.stringify(pick.directs);
+  const compound = pick.compound ? JSON.stringify(pick.compound) : null;
+  database.prepare(`
+    INSERT INTO expert_picks (user_id, lottery_code, based_issue, directs, compound, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, lottery_code, based_issue) DO UPDATE SET
+      directs = excluded.directs,
+      compound = excluded.compound,
+      updated_at = excluded.updated_at
+  `).run(userId, lotteryCode, basedIssue, directs, compound, stamp, stamp);
+  return listExpertPicks(lotteryCode).find((row) => row.userId === userId && row.basedIssue === basedIssue) || null;
+}
+
 // 管理后台只提供明确分区的清理，始终保留超级管理员、角色定义和站点配置。
 const CLEARABLE_DATA = {
   draws: { phrase: "清空开奖记录" },
@@ -680,6 +793,11 @@ export function adminDataSummary() {
   const count = (sql) => Number(database.prepare(sql).get().n);
   return {
     draws: count("SELECT COUNT(*) AS n FROM draws"),
+    drawsByLottery: Object.values(LOTTERIES).map((lottery) => ({
+      code: lottery.code,
+      name: lottery.name,
+      count: Number(database.prepare("SELECT COUNT(*) AS n FROM draws WHERE lottery_code = ?").get(lottery.code).n),
+    })),
     customRules: count("SELECT COUNT(*) AS n FROM rules WHERE sort_order <= 0"),
     allRules: count("SELECT COUNT(*) AS n FROM rules"),
     forecasts: count("SELECT COUNT(*) AS n FROM forecasts"),
@@ -871,6 +989,7 @@ export function deleteUser(id) {
   }
   database.exec("BEGIN");
   try {
+    database.prepare("DELETE FROM expert_picks WHERE user_id = ?").run(id);
     database.prepare("DELETE FROM play_orders WHERE user_id = ?").run(id);
     database.prepare("DELETE FROM user_play_prizes WHERE user_id = ?").run(id);
     database.prepare("DELETE FROM sessions WHERE user_id = ?").run(id);
@@ -894,7 +1013,7 @@ export function createSession(userId) {
 export function getSessionUser(token) {
   if (!token) return null;
   const row = database.prepare(`
-    SELECT u.id, u.username, u.role_id, u.play_balance, u.must_change_password, r.name AS role_name, r.is_admin, r.can_play, r.can_operate, s.expires_at, s.created_at
+    SELECT u.id, u.username, u.role_id, u.play_balance, u.must_change_password, u.can_recommend, r.name AS role_name, r.is_admin, r.can_play, r.can_operate, s.expires_at, s.created_at
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     JOIN roles r ON r.id = u.role_id

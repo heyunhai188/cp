@@ -31,6 +31,7 @@ import {
   getScheduledSyncState,
   initDatabase,
   lastSync,
+  trimOldestDraws,
   listForecasts,
   listPlayOrders,
   playAdminReport,
@@ -40,20 +41,24 @@ import {
   listRoles,
   listRules,
   listUsers,
+  listExpertPicks,
   markScheduledSyncComplete,
   markScheduledSyncLottery,
   markScheduledSyncSlot,
   queryDraws,
   resetUserPassword,
+  saveExpertPick,
   saveForecast,
   savePlayDeadlines,
   SESSION_TTL_SECONDS,
   setPlayBalance,
   setUserPlayPrizes,
+  setUserRecommend,
   takeInitialAdmin,
   updateRule,
   updateRolePlay,
 } from "./src/db.js";
+import { expertBoard, expertWindowSize, normalizeExpertPick } from "./src/expert.js";
 import { markLatestForecast, reviewForecasts } from "./src/forecastCheck.js";
 import { getLottery, listLotteries } from "./src/lottery.js";
 import { hashPassword, randomPassword, verifyPassword } from "./src/password.js";
@@ -547,12 +552,20 @@ function forecast(url, response, user) {
   const archive = user.canOperate
     ? forecastRecord(code, draws, result, false)
     : readArchive(code, draws);
+  const picks = listExpertPicks(code);
+  const mine = user.canRecommend && draws[0]
+    ? picks.find((row) => row.userId === user.id && row.basedIssue === draws[0].issue) || null
+    : null;
   send(response, 200, {
     lottery: publicLottery(lottery),
     drawCount: draws.length,
     latest: draws[0] ? presentDraw(draws[0]) : null,
     archive,
     checks: reviewForecasts(draws, listForecasts(code, clampN(url.searchParams.get("checksN") || 30))),
+    experts: {
+      ...expertBoard(draws, picks, expertWindowSize(url.searchParams.get("expertN"))),
+      mine,
+    },
     ...result,
   });
 }
@@ -692,6 +705,7 @@ function sessionCookie(token, maxAge, request) {
 
 function accessMode(request, url) {
   if (url.pathname === "/api/me/password") return "view";
+  if (url.pathname === "/api/expert-picks") return "recommend";
   if (url.pathname.startsWith("/api/admin/")) return "manage";
   if (url.pathname === "/api/play" || url.pathname.startsWith("/api/play/") || url.pathname === "/api/orders" || url.pathname.startsWith("/api/orders/")) return "play";
   if (request.method === "GET" || request.method === "HEAD") return "view";
@@ -710,6 +724,10 @@ function requireAccount(request, response, mode) {
   }
   if (mode === "play" && !account.canPlay) {
     send(response, 403, { error: "没有模拟试玩权限" });
+    return null;
+  }
+  if (mode === "recommend" && !account.canRecommend) {
+    send(response, 403, { error: "没有专家推荐权限" });
     return null;
   }
   if (mode === "manage" && !account.canManage) {
@@ -852,6 +870,13 @@ const server = http.createServer(async (request, response) => {
       send(response, 200, clearAdminData(body.category, body.confirmation));
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/admin/draws-trim") {
+      const body = await readJson(request);
+      const lottery = getLottery(body.lottery);
+      const result = trimOldestDraws(lottery.code, body.count, body.confirmation);
+      send(response, 200, { ...result, name: lottery.name, summary: adminDataSummary() });
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/admin/users") {
       const body = await readJson(request);
       send(response, 200, { user: createUser(body) });
@@ -862,6 +887,13 @@ const server = http.createServer(async (request, response) => {
     if (userPasswordMatch && request.method === "PUT") {
       await readJson(request);
       const user = resetUserPassword(Number(userPasswordMatch[1]));
+      send(response, 200, { user });
+      return;
+    }
+    const userRecommendMatch = url.pathname.match(/^\/api\/admin\/users\/(\d+)\/recommend$/);
+    if (userRecommendMatch && request.method === "PUT") {
+      const body = await readJson(request);
+      const user = setUserRecommend(Number(userRecommendMatch[1]), Boolean(body.enabled));
       send(response, 200, { user });
       return;
     }
@@ -921,6 +953,23 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/api/forecasts") {
       await replaceForecast(request, response);
+      return;
+    }
+    if (request.method === "PUT" && url.pathname === "/api/expert-picks") {
+      const body = await readJson(request);
+      const lottery = getLottery(lotteryCodeFrom(body.lottery));
+      const draws = getDraws(lottery.code);
+      if (!draws[0]) {
+        send(response, 400, { error: "还没有开奖，不能推荐" });
+        return;
+      }
+      saveExpertPick({
+        userId: account.id,
+        lotteryCode: lottery.code,
+        basedIssue: draws[0].issue,
+        pick: normalizeExpertPick(body, lottery),
+      });
+      send(response, 200, { ok: true });
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/draws") {

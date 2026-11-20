@@ -13,3 +13,8 @@ export function currentLottery() {
 export function currentRange(code = currentLottery()) {
   return clampN(localStorage.getItem(`range.${code}`) || "100");
 }
+
+// 预测窗口单独保存。首页统计选「全部」时，不会把预测改成跟着库里的期数一起变长。
+export function predictRange(code = currentLottery()) {
+  return clampN(localStorage.getItem(`predict.range.${code}`) || "100");
+}

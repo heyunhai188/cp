@@ -52,8 +52,6 @@ onMounted(load);
 <template>
   <p v-if="error" class="banner" role="alert">{{ error }}</p>
   <header class="page-hero manage-hero">
-    <p class="eyebrow">超级管理员</p>
-    <h1>管理中心</h1>
     <p class="lede">账号、模拟试玩和开奖状态集中在这里。</p>
     <button class="text-btn" type="button" :disabled="loading" @click="load">{{ loading ? "正在刷新…" : "刷新概况" }}</button>
   </header>

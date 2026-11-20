@@ -97,8 +97,6 @@ onMounted(load);
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
   <header class="page-hero">
-    <p class="eyebrow">已同步的开奖</p>
-    <h1>开奖查询</h1>
     <p class="lede">{{ counts || "正在读取…" }}</p>
     <p class="query-current">当前：{{ filters.lottery ? ({ fc3d: "福彩3D", pl3: "排列三", pl5: "排列五" }[filters.lottery]) : "全部彩种" }}<span v-if="filters.issue"> · 期号含 {{ filters.issue }}</span><span v-if="filters.number"> · 号码含 {{ filters.number }}</span><span v-if="filters.dateFrom || filters.dateTo"> · {{ filters.dateFrom || "不限开始" }} 至 {{ filters.dateTo || "不限结束" }}</span></p>
     <button class="btn ghost" type="button" @click="filtersOpen = !filtersOpen">{{ filtersOpen ? "收起筛选" : "筛选" }}</button>

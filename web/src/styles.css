@@ -131,7 +131,48 @@ p { margin: 0 0 8px; }
 .tabbar a { flex-direction: column; gap: 2px; min-height: 54px; padding-top: 5px; }
 .tab-icon { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
-.page { padding: calc(var(--bar) + env(safe-area-inset-top) + 12px) 12px calc(74px + env(safe-area-inset-bottom)); }
+.page { padding: calc(var(--bar) + env(safe-area-inset-top) + 12px) 12px calc(96px + env(safe-area-inset-bottom)); }
+.page.play-page { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
+.side-brand { display: none; margin: 0; }
+.section-tabs { display: flex; gap: 6px; overflow-x: auto; margin: 0 0 12px; padding-bottom: 2px; }
+.section-tabs button { flex: 0 0 auto; border: 1px solid var(--brand-line); border-radius: 999px; padding: 7px 12px; background: var(--card); color: var(--muted); }
+.section-tabs button.on { color: white; background: var(--purple); border-color: var(--purple); }
+
+@media (min-width: 900px) {
+  .app-frame.has-nav {
+    max-width: 1120px;
+    display: grid;
+    grid-template-columns: 188px minmax(0, 1fr);
+    grid-template-areas: "tabs bar" "tabs page";
+    align-items: start;
+  }
+  .app-bar, .tabbar, .bet-bar { position: sticky; left: auto; transform: none; width: auto; }
+  .tabbar {
+    grid-area: tabs;
+    top: 0;
+    bottom: auto;
+    height: 100vh;
+    flex-direction: column;
+    align-items: stretch;
+    border-top: 0;
+    border-right: 1px solid var(--border-subtle);
+    padding: 16px 10px;
+  }
+  .side-brand { display: block; padding: 4px 8px 14px; color: var(--brand-deep); font-weight: 700; }
+  .tabbar a { flex-direction: row; justify-content: flex-start; gap: 10px; min-height: 44px; padding: 8px 10px; border-radius: 10px; font-size: 15px; }
+  .tabbar a.on { background: var(--brand-soft); }
+  .app-bar { grid-area: bar; top: 0; }
+  .page { grid-area: page; padding: 16px 20px 32px; }
+  .page.play-page { padding-bottom: 88px; }
+  .bet-bar {
+    position: fixed;
+    bottom: 0;
+    left: calc(max(0px, (100vw - 1120px) / 2) + 188px);
+    width: min(932px, calc(100vw - 188px));
+    transform: none;
+  }
+  .bet-error { left: calc(max(0px, (100vw - 1120px) / 2) + 200px); transform: none; width: min(480px, calc(100vw - 220px)); bottom: 64px; }
+}
 
 .page-hero, .ticket-hero, .panel, .card, .login-card {
   background: var(--card);
@@ -321,6 +362,14 @@ th { color: var(--purple-deep); }
   font-size: 16px;
 }
 .num.on { background: var(--purple); color: white; border-color: var(--purple); }
+.expert-board { display: grid; gap: 12px; }
+.expert-editor, .expert-card { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--brand-line); border-radius: 12px; }
+.expert-card header, .expert-line-head, .expert-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.expert-card header span, .expert-card header b { font-variant-numeric: tabular-nums; }
+.expert-position { display: grid; gap: 4px; }
+.expert-digits { display: flex; flex-wrap: wrap; gap: 6px; }
+.expert-digits .num { width: 36px; height: 36px; }
+.expert-board .check { display: flex; align-items: center; gap: 8px; }
 .bet-bar {
   bottom: calc(50px + env(safe-area-inset-bottom));
   display: flex;
@@ -492,12 +541,14 @@ th { color: var(--purple-deep); }
 .user-tools select { flex: 0 1 150px; }
 .user-card { display: grid; gap: 5px; }
 .user-card .text-btn { justify-self: end; padding: 4px 0; }
-.user-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.user-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; }
 .empty-hint { padding: 14px 4px; color: var(--muted); text-align: center; }
 .clear-section { border-color: #f0d9d6; }
 .clear-order-hint { margin: 0 0 12px; padding: 11px 12px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-deep); font-size: 13px; line-height: 1.5; }
 .clear-order-hint p { margin: 4px 0 0; }
 .clear-grid { grid-template-columns: 1fr; }
+.trim-card { margin-bottom: 10px; }
+.trim-card .admin-form { margin-top: 0; }
 .clear-card { display: grid; gap: 8px; border-color: #f1e7e6; }
 .clear-card h3 { margin: 0 0 4px; font-size: 15px; }
 .clear-card > div strong { color: var(--purple-deep); font-variant-numeric: tabular-nums; }

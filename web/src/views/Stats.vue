@@ -194,6 +194,7 @@ onUnmounted(() => {
             :class="{ on: item.code === overview.lottery.code }"
             @click="switchLottery(item.code)"
           >{{ item.name }}</button>
+          <RouterLink class="btn ghost small" to="/query">开奖查询</RouterLink>
         </div>
         <div class="latest">
           <div class="latest-row">
@@ -211,70 +212,63 @@ onUnmounted(() => {
         <p class="quiet">本地 {{ overview.drawCount }} 期<span v-if="overview.remoteTotal">，官网 {{ overview.remoteTotal }} 期</span>。点规则详情可以看期号和号码。</p>
       </div>
     </header>
-    <div class="layout">
-      <aside class="side">
-        <details class="panel fold">
-          <summary>统计范围 · 近 {{ n }} 期</summary>
-          <div class="range-row">
-            <span>近</span>
-            <input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @input="onRangeInput" />
-            <span>期</span>
-          </div>
-          <div class="presets">
-            <button v-for="value in presets" :key="value" class="btn ghost small" type="button" @click="setN(value)">{{ value }}</button>
-            <button class="btn ghost small" type="button" @click="setN('all')">全部</button>
-          </div>
-        </details>
-        <section class="panel">
-          <h2>数据同步</h2>
-          <div v-if="session.user?.canOperate" class="actions">
-            <button class="btn gold" type="button" :disabled="busy" @click="runSync('auto')">{{ overview.drawCount ? "同步最新" : "获取近 500 期" }}</button>
-            <button class="btn ghost" type="button" :disabled="busy || !overview.drawCount" @click="runSync('backfill')">向前补 500 期</button>
-          </div>
-          <p class="status quiet">{{ status }}</p>
-        </section>
-        <details class="panel fold">
-          <summary>最近开奖（{{ overview.recent.length }} 期）</summary>
-          <ul v-if="overview.recent.length" class="recent">
-            <li v-for="draw in overview.recent" :key="draw.issue">
-              <span><b>{{ draw.issue }}</b><br><span class="quiet">{{ draw.drawDate }}</span></span>
-              <MiniBalls :digits="draw.digits" />
-            </li>
-          </ul>
-          <p v-else class="quiet">同步后显示在这里。</p>
-        </details>
-      </aside>
-      <section>
-        <div class="section-head">
-          <div>
-            <h2>规则</h2>
-            <p class="quiet">{{ windowNote }} 统计用了 {{ formatElapsed(overview.elapsedMs) }}。</p>
-          </div>
-          <button v-if="session.user?.canOperate" class="btn gold small" type="button" @click="openCreate">新建规则</button>
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>规则</h2>
+          <p class="quiet">{{ windowNote }} 统计用了 {{ formatElapsed(overview.elapsedMs) }}。</p>
         </div>
-        <div class="cards">
-          <article v-for="rule in overview.rules" :key="rule.id" class="card" :class="{ active: String(detail.id) === String(rule.id) }">
-            <div class="card-head">
-              <h3>{{ rule.name }}</h3>
-              <div v-if="session.user?.canOperate">
-                <button class="text-btn" type="button" @click="openEdit(rule)">编辑</button>
-                <button class="text-btn" type="button" @click="removeRule(rule)">删除</button>
-              </div>
+        <button v-if="session.user?.canOperate" class="btn gold small" type="button" @click="openCreate">新建规则</button>
+      </div>
+      <div class="cards">
+        <article v-for="rule in overview.rules" :key="rule.id" class="card" :class="{ active: String(detail.id) === String(rule.id) }">
+          <div class="card-head">
+            <h3>{{ rule.name }}</h3>
+            <div v-if="session.user?.canOperate">
+              <button class="text-btn" type="button" @click="openEdit(rule)">编辑</button>
+              <button class="text-btn" type="button" @click="removeRule(rule)">删除</button>
             </div>
-            <p class="summary">{{ rule.summary }}</p>
-            <div class="metric"><span class="hits">{{ rule.hits }}</span><span class="quiet">/ {{ overview.window }} 期 · {{ percent(rule.ratio) }}</span></div>
-            <div v-if="rule.strip?.length" class="strip" aria-hidden="true">
-              <i v-for="(flag, index) in rule.strip" :key="index" :class="{ on: flag }" :title="`${rule.stripIssues?.[index] || ''} ${flag ? '命中' : '未中'}`"></i>
-            </div>
-            <div v-if="rule.strip?.length" class="strip-label"><span>较早</span><span>最新</span></div>
-            <div class="card-foot">
-              <span class="pill" :class="omissionLabel(rule.omission).kind">{{ omissionLabel(rule.omission).text }}</span>
-              <button class="btn gold small" type="button" @click="openDetail(rule.id)">详情</button>
-            </div>
-          </article>
-        </div>
-      </section>
-    </div>
+          </div>
+          <p class="summary">{{ rule.summary }}</p>
+          <div class="metric"><span class="hits">{{ rule.hits }}</span><span class="quiet">/ {{ overview.window }} 期 · {{ percent(rule.ratio) }}</span></div>
+          <div v-if="rule.strip?.length" class="strip" aria-hidden="true">
+            <i v-for="(flag, index) in rule.strip" :key="index" :class="{ on: flag }" :title="`${rule.stripIssues?.[index] || ''} ${flag ? '命中' : '未中'}`"></i>
+          </div>
+          <div v-if="rule.strip?.length" class="strip-label"><span>较早</span><span>最新</span></div>
+          <div class="card-foot">
+            <span class="pill" :class="omissionLabel(rule.omission).kind">{{ omissionLabel(rule.omission).text }}</span>
+            <button class="btn gold small" type="button" @click="openDetail(rule.id)">详情</button>
+          </div>
+        </article>
+      </div>
+    </section>
+    <details class="panel fold">
+      <summary>数据 · 近 {{ n }} 期 · 本地 {{ overview.drawCount }} 期</summary>
+      <div class="range-row">
+        <span>近</span>
+        <input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @input="onRangeInput" />
+        <span>期</span>
+      </div>
+      <div class="presets">
+        <button v-for="value in presets" :key="value" class="btn ghost small" type="button" @click="setN(value)">{{ value }}</button>
+        <button class="btn ghost small" type="button" @click="setN('all')">全部</button>
+      </div>
+      <h2>数据同步</h2>
+      <div v-if="session.user?.canOperate" class="actions">
+        <button class="btn gold" type="button" :disabled="busy" @click="runSync('auto')">{{ overview.drawCount ? "同步最新" : "获取近 500 期" }}</button>
+        <button class="btn ghost" type="button" :disabled="busy || !overview.drawCount" @click="runSync('backfill')">向前补 500 期</button>
+      </div>
+      <p v-else class="quiet">同步由可操作的账号执行。</p>
+      <p class="status quiet">{{ status }}</p>
+      <h3>最近开奖（{{ overview.recent.length }} 期）</h3>
+      <ul v-if="overview.recent.length" class="recent">
+        <li v-for="draw in overview.recent" :key="draw.issue">
+          <span><b>{{ draw.issue }}</b><br><span class="quiet">{{ draw.drawDate }}</span></span>
+          <MiniBalls :digits="draw.digits" />
+        </li>
+      </ul>
+      <p v-else class="quiet">同步后显示在这里。</p>
+    </details>
   </template>
 
   <RuleEditor

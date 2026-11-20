@@ -58,13 +58,8 @@ async function changePassword() {
     <strong>请先设置新密码</strong>
     <p>这是管理员提供的一次性临时密码。修改完成前，其他页面和操作暂不可用。</p>
   </section>
-  <nav class="mine-list">
-    <RouterLink v-if="!session.user?.mustChangePassword && session.user?.canManage" to="/manage">管理中心：用户、试玩与同步概况</RouterLink>
-    <RouterLink v-if="!session.user?.mustChangePassword" to="/backtest">向前回测</RouterLink>
-    <RouterLink v-if="!session.user?.mustChangePassword && session.user?.canPlay" to="/orders">模拟订单</RouterLink>
-    <RouterLink v-if="!session.user?.mustChangePassword && session.user?.canPlay" to="/play">模拟试玩</RouterLink>
-    <RouterLink v-if="!session.user?.mustChangePassword && session.user?.canManage" to="/play-admin">试玩管理</RouterLink>
-    <RouterLink v-if="!session.user?.mustChangePassword && session.user?.canManage" to="/admin">用户管理</RouterLink>
+  <nav v-if="!session.user?.mustChangePassword && session.user?.canManage" class="mine-list">
+    <RouterLink to="/manage">管理中心</RouterLink>
   </nav>
   <form class="panel" @submit.prevent="changePassword">
     <h2>{{ session.user?.mustChangePassword ? "设置新密码" : "修改密码" }}</h2>

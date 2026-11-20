@@ -5,7 +5,6 @@ import Login from "./views/Login.vue";
 import Stats from "./views/Stats.vue";
 import Query from "./views/Query.vue";
 import Predict from "./views/Predict.vue";
-import Backtest from "./views/Backtest.vue";
 import Admin from "./views/Admin.vue";
 import Mine from "./views/Mine.vue";
 import Play from "./views/Play.vue";
@@ -29,7 +28,7 @@ export const router = createRouter({
       children: [
         { path: "", component: Stats, meta: { title: "首页" } },
         { path: "predict", component: Predict, meta: { title: "号码预测" } },
-        { path: "backtest", component: Backtest, meta: { title: "向前回测" } },
+        { path: "backtest", redirect: (to) => ({ path: "/predict", query: { ...to.query, tab: "backtest" } }) },
         { path: "query", component: Query, meta: { title: "开奖查询" } },
         { path: "play", component: Play, meta: { title: "模拟试玩", play: true } },
         { path: "orders", component: Orders, meta: { title: "模拟订单", play: true } },

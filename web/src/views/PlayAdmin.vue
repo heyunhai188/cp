@@ -1,6 +1,27 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { request } from "../api.js";
+import SectionTabs from "../components/SectionTabs.vue";
+
+const route = useRoute();
+const router = useRouter();
+const PANES = [
+  { id: "deadline", label: "截止时间", hash: "#deadline-management" },
+  { id: "prize", label: "单注奖金", hash: "#prize-management" },
+  { id: "wallet", label: "余额", hash: "#wallet-management" },
+  { id: "orders", label: "订单", hash: "#order-management" },
+];
+function paneFromHash(hash) {
+  return PANES.find((item) => item.hash === hash)?.id || "deadline";
+}
+const pane = ref(paneFromHash(route.hash));
+watch(() => route.hash, (hash) => { pane.value = paneFromHash(hash); });
+function showPane(id) {
+  const next = PANES.find((item) => item.id === id);
+  pane.value = next.id;
+  if (route.hash !== next.hash) router.replace({ hash: next.hash });
+}
 
 const deadlines = ref([]);
 const summary = ref(null);
@@ -208,12 +229,8 @@ onMounted(async () => {
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
   <p v-if="notice" class="admin-notice" role="status">{{ notice }}</p>
-  <header class="page-hero">
-    <p class="eyebrow">模拟试玩</p>
-    <h1>试玩运营台</h1>
-    <p class="lede">管理截止时间、试玩额度和全部用户的模拟订单。</p>
-    <nav class="play-admin-nav"><a href="#prize-management">单注奖金</a><a href="#wallet-management">用户余额</a><a href="#order-management">订单明细</a><a href="#deadline-management">截止设置</a></nav>
-  </header>
+  <SectionTabs :tabs="PANES" :model-value="pane" @update:model-value="showPane" />
+  <p class="quiet">一次只改一件事。盈亏只统计已开奖的模拟订单，未开奖金额单独占用，不计入当前盈亏。</p>
 
   <section v-if="summary" class="play-admin-kpis">
     <article class="panel"><span>可试玩用户</span><strong>{{ users.length }}<small>人</small></strong><em>模拟余额合计 {{ totalBalance }} 元</em></article>
@@ -221,9 +238,9 @@ onMounted(async () => {
     <article class="panel"><span>今日模拟盈亏</span><strong :class="summary.today.profit >= 0 ? 'gain' : 'loss'">{{ money(summary.today.profit) }}</strong><em>投入 {{ summary.today.stake }} · 收回 {{ summary.today.prize }} 元</em></article>
     <article class="panel"><span>本月模拟盈亏</span><strong :class="summary.month.profit >= 0 ? 'gain' : 'loss'">{{ money(summary.month.profit) }}</strong><em>投入 {{ summary.month.stake }} · 收回 {{ summary.month.prize }} 元</em></article>
   </section>
-  <p class="quiet play-admin-note">盈亏仅统计已开奖的模拟订单；未开奖的金额单独列为占用，不计入当前盈亏。模拟奖金不是真实派奖。</p>
+  <p v-if="pane === 'deadline'" class="quiet play-admin-note">修改截止时间只对之后新下的订单生效。</p>
 
-  <section id="deadline-management" class="panel play-admin-section">
+  <section v-if="pane === 'deadline'" id="deadline-management" class="panel play-admin-section">
     <div class="play-admin-section-head"><div><p class="eyebrow">彩种设置</p><h2>撤销截止时间</h2></div></div>
     <p class="quiet">截止前允许用户撤销并退回金额。修改只对之后新下的订单生效，已有订单保留原截止时间。</p>
     <form class="deadline-form" @submit.prevent="saveDeadlines">
@@ -235,7 +252,7 @@ onMounted(async () => {
     </form>
   </section>
 
-  <section id="prize-management" class="panel play-admin-section">
+  <section v-if="pane === 'prize'" id="prize-management" class="panel play-admin-section">
     <div class="play-admin-section-head"><div><p class="eyebrow">结算金额</p><h2>单注奖金</h2></div><span class="admin-count">已选 {{ selectedIds.length }} 人</span></div>
     <p class="quiet">每个彩种可以按人单独设置。不设置时福彩3D、排列三默认 1040 元，排列五默认 100000 元。勾选多人后一次保存，会把下面三个金额同时应用到这些人。已经开奖的订单不重算。</p>
     <form class="prize-form" @submit.prevent="savePrizes(false)">
@@ -249,7 +266,7 @@ onMounted(async () => {
     </form>
   </section>
 
-  <section id="wallet-management" class="panel play-admin-section">
+  <section v-if="pane === 'wallet'" id="wallet-management" class="panel play-admin-section">
     <div class="play-admin-section-head"><div><p class="eyebrow">额度管理</p><h2>用户模拟余额</h2></div><span class="admin-count">{{ users.length }} 人 · {{ totalBalance }} 元</span></div>
     <p class="quiet">调整余额不会取消未开奖订单，也不会覆盖历史订单。金额只用于模拟试玩。</p>
     <label class="play-admin-search">搜索试玩用户<input v-model="walletSearch" type="search" placeholder="输入账号" /></label>
@@ -265,7 +282,7 @@ onMounted(async () => {
     </div>
   </section>
 
-  <section id="order-management" class="panel play-admin-section">
+  <section v-if="pane === 'orders'" id="order-management" class="panel play-admin-section">
     <div class="play-admin-section-head"><div><p class="eyebrow">订单核对</p><h2>模拟下注明细</h2></div><span class="admin-count">显示 {{ filteredOrders.length }} / {{ orders.length }}</span></div>
     <div class="play-admin-filters">
       <input v-model="orderSearch" type="search" placeholder="按用户名搜索" aria-label="按用户名搜索订单">

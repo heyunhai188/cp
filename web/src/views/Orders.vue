@@ -101,8 +101,6 @@ onMounted(async () => {
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
   <header class="page-hero">
-    <p class="eyebrow">模拟订单</p>
-    <h1>下注结果</h1>
     <p class="lede">模拟余额 {{ balance }} 元。这里查看开奖、奖金和撤单状态；模拟奖金不是实际派奖。</p>
     <button class="btn ghost" type="button" :disabled="syncing" @click="syncDraws">{{ syncing ? "正在同步三个彩种…" : "同步开奖并核对" }}</button>
   </header>
