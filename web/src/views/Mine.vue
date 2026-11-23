@@ -1,8 +1,8 @@
 <script setup>
 import { ref } from "vue";
 import { request } from "../api.js";
+import PageHeader from "../components/PageHeader.vue";
 import { session } from "../session.js";
-import { applyTheme, THEMES, themeStorageKey } from "../theme.js";
 
 const oldPassword = ref("");
 const newPassword = ref("");
@@ -10,12 +10,6 @@ const again = ref("");
 const message = ref("");
 const error = ref("");
 const saving = ref(false);
-const activeTheme = ref(document.documentElement.dataset.theme || "classic");
-
-function chooseTheme(theme) {
-  activeTheme.value = applyTheme(theme.id);
-  localStorage.setItem(themeStorageKey(session.user?.id), theme.id);
-}
 
 async function changePassword() {
   error.value = "";
@@ -45,15 +39,12 @@ async function changePassword() {
 </script>
 
 <template>
-  <header class="page-hero">
-    <p class="eyebrow">当前账号</p>
-    <h1>{{ session.user?.username }}</h1>
-    <p class="lede">{{ session.user?.roleName }}</p>
+  <PageHeader eyebrow="当前账号" :title="session.user?.username || ''" :lede="session.user?.roleName || ''">
     <div class="mine-permissions" aria-label="当前账号权限">
       <span>{{ session.user?.canManage ? "超级管理员" : session.user?.canOperate ? "可操作数据" : "只读查看" }}</span>
       <span>{{ session.user?.canPlay ? "可模拟试玩" : "无试玩权限" }}</span>
     </div>
-  </header>
+  </PageHeader>
   <section v-if="session.user?.mustChangePassword" class="panel password-required" role="status">
     <strong>请先设置新密码</strong>
     <p>这是管理员提供的一次性临时密码。修改完成前，其他页面和操作暂不可用。</p>
@@ -77,12 +68,4 @@ async function changePassword() {
     </label>
     <button class="btn gold" type="submit" :disabled="saving">保存新密码</button>
   </form>
-  <section class="panel">
-    <h2>页面主题</h2>
-    <div class="theme-choices">
-      <button v-for="theme in THEMES" :key="theme.id" class="theme-option" :class="{ selected: activeTheme === theme.id }" type="button" @click="chooseTheme(theme)">
-        <i :style="{ background: theme.swatch }"></i><span><b>{{ theme.name }}</b><small>{{ theme.note }}</small></span><em v-if="activeTheme === theme.id">✓</em>
-      </button>
-    </div>
-  </section>
 </template>

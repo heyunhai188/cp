@@ -317,21 +317,30 @@ onMounted(async () => {
     <div class="order-status-tabs" role="group" aria-label="按订单状态筛选">
       <button v-for="option in [{ label: '全部', value: '' }, { label: '待开奖', value: 'pending' }, { label: '已中奖', value: 'hit' }, { label: '未中奖', value: 'miss' }, { label: '已撤销', value: 'cancelled' }]" :key="option.value || 'all'" type="button" :class="{ selected: orderStatus === option.value }" @click="orderStatus = option.value">{{ option.label }}</button>
     </div>
-    <p v-if="!filteredOrders.length" class="quiet empty-hint">{{ orders.length ? "没有符合条件的订单。" : "还没有模拟订单。" }}</p>
-    <article v-for="order in filteredOrders" :key="order.id" class="order admin-order">
-      <header>
-        <div><strong>{{ order.username }}</strong><small>{{ order.lotteryName }} · 第{{ order.targetIssue || order.basedIssue }}期</small></div>
-        <span :class="['order-status', order.status]">{{ statusText(order) }}</span>
-      </header>
-      <p class="picks">{{ selectionText(order) }}</p>
-      <p v-if="order.funded" class="quiet">{{ order.multiple }} 倍 · {{ order.bets }} 注 · {{ order.stake }} 元 · {{ order.createdText }}</p>
-      <p v-else class="quiet">历史订单 · {{ order.bets }} 注 · {{ order.stake }} 元 · {{ order.createdText }}</p>
-      <p v-if="!order.funded" class="quiet">这单没有扣余额，不计入盈亏。</p>
-      <p v-else-if="order.status === 'hit'" class="quiet">奖金 {{ order.prize }} 元 · {{ money(order.prize - order.stake) }}</p>
-      <p v-else-if="order.status === 'miss'" class="quiet">{{ money(-order.stake) }}<span v-if="order.resultDigits?.length"> · 开奖 {{ order.resultDigits.join(" ") }}</span></p>
-      <p v-else-if="order.status === 'pending'" class="quiet">未开奖 · 占用 {{ order.stake }} 元<template v-if="order.deadlineText"> · 可撤销至 {{ order.deadlineText }}</template></p>
-      <p v-else class="quiet">已退回 {{ order.stake }} 元</p>
-      <button v-if="!order.funded || order.status === 'cancelled'" class="btn ghost small" type="button" :disabled="busyId === order.id" @click="dismiss(order)">移除</button>
-    </article>
+    <div class="table-wrap order-table">
+      <table class="data-table">
+        <thead>
+          <tr><th>用户</th><th>彩种</th><th>号码</th><th>金额</th><th>状态</th><th>说明</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-if="!filteredOrders.length"><td colspan="7">{{ orders.length ? "没有符合条件的订单。" : "还没有模拟订单。" }}</td></tr>
+          <tr v-for="order in filteredOrders" :key="order.id">
+            <td><strong>{{ order.username }}</strong></td>
+            <td>{{ order.lotteryName }} · 第{{ order.targetIssue || order.basedIssue }}期</td>
+            <td class="picks">{{ selectionText(order) }}</td>
+            <td>{{ order.multiple }}倍 · {{ order.bets }}注 · {{ order.stake }}元</td>
+            <td><span :class="['order-status', order.status]">{{ statusText(order) }}</span></td>
+            <td class="wrap quiet">
+              <template v-if="!order.funded">未扣余额</template>
+              <template v-else-if="order.status === 'hit'">奖金 {{ order.prize }} 元 · {{ money(order.prize - order.stake) }}</template>
+              <template v-else-if="order.status === 'miss'">{{ money(-order.stake) }}<span v-if="order.resultDigits?.length"> · 开奖 {{ order.resultDigits.join(" ") }}</span></template>
+              <template v-else-if="order.status === 'pending'">占用 {{ order.stake }} 元<template v-if="order.deadlineText"> · 可撤销至 {{ order.deadlineText }}</template></template>
+              <template v-else>已退回 {{ order.stake }} 元</template>
+            </td>
+            <td><button v-if="!order.funded || order.status === 'cancelled'" class="btn ghost small" type="button" :disabled="busyId === order.id" @click="dismiss(order)">移除</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </template>

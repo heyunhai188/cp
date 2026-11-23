@@ -314,15 +314,26 @@ onMounted(async () => {
 
   <section v-if="pane === 'roles'" id="roles" class="panel admin-section">
     <div class="admin-section-head"><div><h2>角色权限</h2><p class="quiet">管理员可操作同步、统计规则和预测；查询角色默认只读。试玩权限可单独开关。</p></div><span class="admin-count">{{ roles.length }} 个角色</span></div>
-    <div class="role-list">
-      <article v-for="role in roles" :key="role.id" class="role-card">
-        <div class="role-card-main"><strong>{{ role.name }}</strong><span v-if="role.canManage" class="admin-badge">唯一超级管理员</span><span v-else class="quiet">{{ role.canOperate ? "网站操作权限" : "只读权限" }}</span></div>
-        <div class="role-card-meta"><span>{{ roleMemberCount(role.id) }} 位用户</span><span :class="role.canPlay ? 'permission-on' : 'permission-off'">{{ role.canPlay ? "可模拟试玩" : "不可试玩" }}</span></div>
-        <div v-if="!role.canManage" class="role-actions">
-          <button class="btn ghost small" type="button" @click="togglePlay(role)">{{ role.canPlay ? "关闭试玩权限" : "开启试玩权限" }}</button>
-          <button v-if="!role.builtIn" class="text-btn danger-text" type="button" @click="removeRole(role)">删除角色</button>
-        </div>
-      </article>
+    <div class="table-wrap user-table">
+      <table class="data-table">
+        <thead>
+          <tr><th>角色</th><th>权限</th><th>用户</th><th>试玩</th><th class="wrap">操作</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="role in roles" :key="role.id">
+            <td><strong>{{ role.name }}</strong><span v-if="role.canManage" class="admin-badge">唯一超级管理员</span></td>
+            <td>{{ role.canManage ? "全部管理" : role.canOperate ? "网站操作" : "只读" }}</td>
+            <td>{{ roleMemberCount(role.id) }}</td>
+            <td :class="role.canPlay ? 'permission-on' : 'permission-off'">{{ role.canPlay ? "可试玩" : "不可试玩" }}</td>
+            <td class="wrap">
+              <template v-if="!role.canManage">
+                <button class="btn ghost small" type="button" @click="togglePlay(role)">{{ role.canPlay ? "关闭试玩" : "开启试玩" }}</button>
+                <button v-if="!role.builtIn" class="text-btn danger-text" type="button" @click="removeRole(role)">删除</button>
+              </template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
     <details class="admin-add-panel">
       <summary>创建角色</summary>
@@ -350,19 +361,32 @@ onMounted(async () => {
       <p class="quiet">初始密码仅作临时密码；新用户首次登录后必须修改，修改前不能进入其他页面。</p>
     </details>
     <div class="user-tools"><input v-model="searchUser" type="search" placeholder="搜索账号" aria-label="搜索账号" /><select v-model="filterRole" aria-label="按角色筛选"><option value="">全部角色</option><option v-for="role in roles" :key="role.id" :value="String(role.id)">{{ role.name }}</option></select><span class="quiet">显示 {{ filteredUsers.length }} / {{ users.length }}</span></div>
-    <div class="user-list">
-      <article v-for="user in filteredUsers" :key="user.id" class="user-card">
-        <div class="user-card-main"><strong>{{ user.username }}</strong><span v-if="user.id === session.user?.id" class="admin-badge">当前账号</span><span v-if="user.mustChangePassword" class="warning-chip">待改临时密码</span></div>
-        <div class="user-card-meta"><span class="role-tag">{{ user.roleName }}</span><span :class="user.canOperate ? 'permission-on' : 'permission-off'">{{ user.canOperate ? "可操作" : "只读" }}</span><span :class="user.canPlay ? 'permission-on' : 'permission-off'">{{ user.canPlay ? `试玩余额 ${user.playBalance} 元` : "无试玩权限" }}</span><span :class="user.canRecommend ? 'permission-on' : 'permission-off'">{{ user.canRecommend ? "专家推荐" : "非专家" }}</span></div>
-        <div class="user-actions">
-          <button class="btn ghost small" type="button" @click="toggleRecommend(user)">{{ user.canRecommend ? "关闭专家推荐" : "开启专家推荐" }}</button>
-          <template v-if="user.id !== session.user?.id && !user.canManage">
-            <button class="text-btn" type="button" @click="resetTarget = user; resetPasswordShown = ''">重置密码</button>
-            <button class="text-btn danger-text" type="button" @click="removeUser(user)">删除用户</button>
-          </template>
-        </div>
-      </article>
-      <p v-if="!filteredUsers.length" class="empty-hint">没有符合条件的用户。</p>
+    <div class="table-wrap user-table">
+      <table class="data-table">
+        <thead>
+          <tr><th>账号</th><th>角色</th><th>权限</th><th>试玩</th><th class="wrap">操作</th></tr>
+        </thead>
+        <tbody>
+          <tr v-if="!filteredUsers.length"><td colspan="5">没有符合条件的用户。</td></tr>
+          <tr v-for="user in filteredUsers" :key="user.id">
+            <td>
+              <strong>{{ user.username }}</strong>
+              <span v-if="user.id === session.user?.id" class="admin-badge">当前</span>
+              <span v-if="user.mustChangePassword" class="warning-chip">待改密</span>
+            </td>
+            <td><span class="role-tag">{{ user.roleName }}</span></td>
+            <td :class="user.canOperate ? 'permission-on' : 'permission-off'">{{ user.canOperate ? "可操作" : "只读" }}</td>
+            <td :class="user.canPlay ? 'permission-on' : 'permission-off'">{{ user.canPlay ? `${user.playBalance} 元` : "无" }}<span :class="user.canRecommend ? 'permission-on' : 'permission-off'"> · {{ user.canRecommend ? "专家" : "非专家" }}</span></td>
+            <td class="wrap">
+              <button class="btn ghost small" type="button" @click="toggleRecommend(user)">{{ user.canRecommend ? "关闭专家" : "开启专家" }}</button>
+              <template v-if="user.id !== session.user?.id && !user.canManage">
+                <button class="text-btn" type="button" @click="resetTarget = user; resetPasswordShown = ''">重置密码</button>
+                <button class="text-btn danger-text" type="button" @click="removeUser(user)">删除</button>
+              </template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </section>
 

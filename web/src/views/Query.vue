@@ -100,9 +100,9 @@ onMounted(load);
   <header class="page-hero">
     <p class="lede">{{ counts || "正在读取…" }}</p>
     <p class="query-current">当前：{{ filters.lottery ? (NAMES[filters.lottery] || filters.lottery) : "全部彩种" }}<span v-if="filters.issue"> · 期号含 {{ filters.issue }}</span><span v-if="filters.number"> · 号码含 {{ filters.number }}</span><span v-if="filters.dateFrom || filters.dateTo"> · {{ filters.dateFrom || "不限开始" }} 至 {{ filters.dateTo || "不限结束" }}</span></p>
-    <button class="btn ghost" type="button" @click="filtersOpen = !filtersOpen">{{ filtersOpen ? "收起筛选" : "筛选" }}</button>
+    <button class="btn ghost filters-toggle" type="button" @click="filtersOpen = !filtersOpen">{{ filtersOpen ? "收起筛选" : "筛选" }}</button>
   </header>
-  <form v-show="filtersOpen" class="panel query-filters" @submit.prevent="search">
+  <form class="panel query-filters" :class="{ 'is-collapsed': !filtersOpen }" @submit.prevent="search">
     <label>彩种
       <select v-model="filters.lottery">
         <option value="">全部</option>
@@ -134,18 +134,27 @@ onMounted(load);
     <button v-for="option in [{ label: '近10期', value: 10 }, { label: '近30期', value: 30 }, { label: '近100期', value: 100 }, { label: '分页浏览', value: 0 }]" :key="option.value" type="button" class="btn ghost small" :class="{ on: recentLimit === option.value }" @click="chooseRecent(option.value)">{{ option.label }}</button>
   </div>
   <p class="quiet">{{ note }}</p>
-  <section class="query-results">
-    <article v-for="row in rows" :key="`${row.lotteryCode}-${row.issue}`" class="panel query-result">
-      <div class="query-result-main">
-        <div><strong>{{ row.lotteryName }}</strong><span class="quiet"> · {{ row.issue }}</span><p class="quiet">{{ row.drawDate }} {{ row.week }}</p></div>
-        <MiniBalls :digits="row.digits" />
-        <button class="text-btn" type="button" :aria-expanded="expandedRow === `${row.lotteryCode}-${row.issue}`" @click="expandedRow = expandedRow === `${row.lotteryCode}-${row.issue}` ? '' : `${row.lotteryCode}-${row.issue}`">{{ expandedRow === `${row.lotteryCode}-${row.issue}` ? "收起" : "详情" }}</button>
-      </div>
-      <div v-if="expandedRow === `${row.lotteryCode}-${row.issue}`" class="query-result-detail">
-        <span>单双 {{ row.parity }}</span><span>大小 {{ row.size }}</span><span>和值 {{ row.sum }}</span><span>跨度 {{ row.span }}</span>
-      </div>
-    </article>
-    <p v-if="!rows.length" class="panel quiet">暂无符合条件的开奖。</p>
+  <section class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>彩种</th><th>期号</th><th>日期</th><th>号码</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr v-if="!rows.length"><td colspan="5" class="wrap">暂无符合条件的开奖。</td></tr>
+        <template v-for="row in rows" :key="`${row.lotteryCode}-${row.issue}`">
+          <tr>
+            <td>{{ row.lotteryName }}</td>
+            <td>{{ row.issue }}</td>
+            <td>{{ row.drawDate }} {{ row.week }}</td>
+            <td><MiniBalls :digits="row.digits" /></td>
+            <td><button class="text-btn" type="button" :aria-expanded="expandedRow === `${row.lotteryCode}-${row.issue}`" @click="expandedRow = expandedRow === `${row.lotteryCode}-${row.issue}` ? '' : `${row.lotteryCode}-${row.issue}`">{{ expandedRow === `${row.lotteryCode}-${row.issue}` ? "收起" : "详情" }}</button></td>
+          </tr>
+          <tr v-if="expandedRow === `${row.lotteryCode}-${row.issue}`">
+            <td colspan="5" class="wrap">单双 {{ row.parity }} · 大小 {{ row.size }} · 和值 {{ row.sum }} · 跨度 {{ row.span }}</td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
   </section>
   <div v-if="!recentLimit && total > pageSize" class="pager">
     <button class="btn ghost" type="button" :disabled="page <= 1" @click="goto(page - 1)">上一页</button>

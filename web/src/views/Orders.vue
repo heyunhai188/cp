@@ -138,25 +138,34 @@ onMounted(async () => {
       <option value="cancelled">已撤销</option>
     </select>
   </div>
-  <p v-if="!error && !visibleOrders.length" class="quiet">没有符合条件的订单。</p>
-  <article v-for="order in visibleOrders" :key="order.id" class="order">
-    <header>
-      <strong>{{ order.lotteryName }} 直选</strong>
-      <span :class="['order-status', order.status]">{{ statusText(order) }}<template v-if="order.cancellable"> · 可撤销</template></span>
-    </header>
-    <p v-if="session.user?.canManage" class="quiet">{{ order.username }}</p>
-    <p class="picks">{{ selectionText(order) }}</p>
-    <p v-if="order.funded" class="quiet">第{{ order.targetIssue }}期 · {{ order.multiple }}倍 · {{ order.bets }}注 · {{ order.stake }}元</p>
-    <p v-else class="quiet">余额功能之前的单 · 依据第{{ order.basedIssue }}期 · {{ order.bets }}注 · {{ order.stake }}元</p>
-    <p class="quiet">{{ order.createdText }} 下单</p>
-    <p v-if="order.cancellable && order.deadlineText" class="order-deadline">可撤销至 {{ order.deadlineText }}</p>
-    <p v-else-if="order.deadlineText && order.status === 'pending'" class="quiet">撤销截止：{{ order.deadlineText }}（已过截止时间）</p>
-    <p v-if="order.status === 'pending' && order.lotteryCode === 'self3d'" class="quiet">第{{ order.targetIssue }}期，回到试玩点开奖后一起兑奖。</p>
-    <p v-else-if="order.status === 'pending' && order.funded" class="quiet">预计第{{ order.targetIssue }}期，还没同步到开奖。</p>
-    <p v-else-if="order.status === 'pending'" class="quiet">还没同步到开奖。</p>
-    <p v-else-if="order.status === 'cancelled'" class="quiet">已退回 {{ order.stake }} 元。</p>
-    <p v-else class="quiet">开奖第{{ order.resultIssue }}期 {{ order.resultDigits.join(" ") }}<template v-if="order.targetIssue && order.resultIssue !== order.targetIssue">（下单时预计 {{ order.targetIssue }}）</template><template v-if="order.status === 'hit'"> · 模拟奖金 {{ order.prize }} 元</template></p>
-    <button v-if="order.cancellable" class="btn ghost small" type="button" :disabled="busyId === order.id" @click="cancel(order)">撤销</button>
-    <button v-if="!order.funded || order.status === 'cancelled'" class="btn ghost small" type="button" :disabled="busyId === order.id" @click="dismiss(order)">移除</button>
-  </article>
+  <div class="table-wrap order-table">
+    <table class="data-table">
+      <thead>
+        <tr><th>彩种</th><th>号码</th><th>期号</th><th>金额</th><th>状态</th><th>说明</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr v-if="!error && !visibleOrders.length"><td colspan="7">没有符合条件的订单。</td></tr>
+        <tr v-for="order in visibleOrders" :key="order.id">
+          <td><strong>{{ order.lotteryName }}</strong><p v-if="session.user?.canManage" class="quiet">{{ order.username }}</p></td>
+          <td class="picks">{{ selectionText(order) }}</td>
+          <td>{{ order.targetIssue || order.basedIssue }}</td>
+          <td>{{ order.multiple }}倍 · {{ order.bets }}注 · {{ order.stake }}元</td>
+          <td><span :class="['order-status', order.status]">{{ statusText(order) }}</span></td>
+          <td class="wrap quiet">
+            <template v-if="!order.funded">余额功能之前的单 · </template>
+            <template v-if="order.cancellable && order.deadlineText">可撤销至 {{ order.deadlineText }}</template>
+            <template v-else-if="order.status === 'hit'">开奖 {{ order.resultDigits.join(" ") }} · 奖金 {{ order.prize }} 元</template>
+            <template v-else-if="order.status === 'cancelled'">已退回 {{ order.stake }} 元</template>
+            <template v-else-if="order.status === 'pending' && order.lotteryCode === 'self3d'">回到试玩点开奖后一起兑奖</template>
+            <template v-else-if="order.status === 'pending'">{{ order.createdText }} 下单，尚未开奖</template>
+            <template v-else>开奖 {{ (order.resultDigits || []).join(" ") }}</template>
+          </td>
+          <td>
+            <button v-if="order.cancellable" class="btn ghost small" type="button" :disabled="busyId === order.id" @click="cancel(order)">撤销</button>
+            <button v-if="!order.funded || order.status === 'cancelled'" class="btn ghost small" type="button" :disabled="busyId === order.id" @click="dismiss(order)">移除</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </template>

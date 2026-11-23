@@ -5,6 +5,9 @@ import { session } from "../session.js";
 import { currentLottery, currentRange } from "../lottery.js";
 import { clampN, formatElapsed, formatWhen, omissionLabel, percent } from "../format.js";
 import Balls from "../components/Balls.vue";
+import EmptyState from "../components/EmptyState.vue";
+import KpiCard from "../components/KpiCard.vue";
+import LotterySwitch from "../components/LotterySwitch.vue";
 import MiniBalls from "../components/MiniBalls.vue";
 import RuleEditor from "../components/RuleEditor.vue";
 
@@ -13,6 +16,7 @@ const lottery = ref(currentLottery());
 const n = ref(currentRange());
 const rangeText = ref(String(n.value));
 const overview = ref(null);
+const peers = ref([]);
 const error = ref("");
 const busy = ref(false);
 const status = ref("");
@@ -22,6 +26,33 @@ const detail = ref({ open: false, id: null, loading: false, data: null, error: "
 let rangeTimer = 0;
 let loadAbort = null;
 let detailToken = 0;
+
+const sums = computed(() => {
+  const rows = [...(overview.value?.recent || [])].reverse();
+  const max = Math.max(1, ...rows.map((draw) => Number(draw.sum) || 0));
+  return rows.map((draw) => ({
+    issue: draw.issue,
+    sum: draw.sum,
+    height: `${Math.max(12, ((Number(draw.sum) || 0) / max) * 100)}%`,
+  }));
+});
+
+const frequencies = computed(() => {
+  const recent = overview.value?.recent || [];
+  const positions = overview.value?.lottery?.positions || [];
+  return positions.map((name, index) => {
+    const counts = Array.from({ length: 10 }, () => 0);
+    for (const draw of recent) {
+      const digit = Number(draw.digits?.[index]);
+      if (digit >= 0 && digit <= 9) counts[digit] += 1;
+    }
+    const max = Math.max(1, ...counts);
+    return {
+      name,
+      bars: counts.map((count, digit) => ({ digit, count, width: `${(count / max) * 100}%` })),
+    };
+  });
+});
 
 const windowNote = computed(() => {
   const data = overview.value;
@@ -50,11 +81,24 @@ async function load() {
     overview.value = data;
     error.value = "";
     status.value = syncLabel(data);
+    loadPeers();
     if (detail.value.open) openDetail(detail.value.id);
   } catch (err) {
     if (err.name === "AbortError") return;
     error.value = err.message || "读取失败";
   }
+}
+
+async function loadPeers() {
+  const rows = await Promise.all(["fc3d", "pl3", "pl5"].map(async (code) => {
+    try {
+      const data = await request(`/api/overview?n=10&lottery=${encodeURIComponent(code)}`);
+      return data.latest ? { code, name: data.lottery.name, latest: data.latest } : null;
+    } catch {
+      return null;
+    }
+  }));
+  peers.value = rows.filter(Boolean);
 }
 
 function rememberRange() {
@@ -176,47 +220,125 @@ onUnmounted(() => {
 
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
-  <section v-if="!overview" class="panel empty">
-    <p>{{ error || "正在读取本地数据…" }}</p>
-    <button v-if="error" class="btn gold" type="button" @click="error = ''; load()">重试</button>
-  </section>
+  <EmptyState v-if="!overview" :title="error ? '读取失败' : '正在读取'" :action="error ? '重试' : ''" @retry="error = ''; load()">
+    {{ error || "正在读取本地开奖…" }}
+  </EmptyState>
   <template v-else>
-    <header class="ticket-hero">
-      <div>
-        <p class="eyebrow">{{ sourceLabel(overview) }} · 个人统计</p>
-        <h1>{{ overview.lottery.name }}</h1>
-        <div class="lottery-switch">
-          <button
-            v-for="item in overview.lotteries"
-            :key="item.code"
-            type="button"
-            class="btn ghost small"
-            :class="{ on: item.code === overview.lottery.code }"
-            @click="switchLottery(item.code)"
-          >{{ item.name }}</button>
-          <RouterLink class="btn ghost small" to="/query">开奖查询</RouterLink>
-        </div>
-        <div class="latest">
-          <div class="latest-row">
-            <Balls :digits="overview.latest?.digits || ['·', '·', '·']" :dim="!overview.latest" />
-            <span
-              v-if="overview.forecastMark"
-              class="forecast-mark"
-              :class="overview.forecastMark"
-              :aria-label="overview.forecastMark === 'hit' ? '这期预测中了' : '这期预测未中'"
-            >{{ overview.forecastMark === "hit" ? "中" : "未中" }}</span>
-          </div>
-          <p class="latest-meta">{{ overview.latest ? `${overview.latest.issue} · ${overview.latest.drawDate} ${overview.latest.week}` : "还没有开奖数据" }}</p>
-          <p class="latest-sub">{{ overview.latest ? `${overview.latest.parity} · ${overview.latest.size} · 和值 ${overview.latest.sum} · 跨度 ${overview.latest.span}` : "先同步近 500 期" }}</p>
-        </div>
-        <p class="quiet">本地 {{ overview.drawCount }} 期<span v-if="overview.remoteTotal">，官网 {{ overview.remoteTotal }} 期</span>。点规则详情可以看期号和号码。</p>
+    <div class="page-tools">
+      <LotterySwitch :items="overview.lotteries" :model-value="overview.lottery.code" @update:model-value="switchLottery" />
+      <div class="page-tools-actions">
+        <RouterLink class="btn ghost small" to="/query">开奖查询</RouterLink>
+        <RouterLink class="btn ghost small" to="/predict">号码预测</RouterLink>
+        <RouterLink v-if="session.user?.canPlay" class="btn gold small" to="/play">模拟投注</RouterLink>
       </div>
-    </header>
-    <section>
+    </div>
+    <div class="board">
+      <section class="dash-card hero-dark">
+        <p class="eyebrow">{{ sourceLabel(overview) }} · 最新开奖</p>
+        <h1>{{ overview.lottery.name }}</h1>
+        <div class="latest-row">
+          <Balls :digits="overview.latest?.digits || ['·', '·', '·']" :dim="!overview.latest" />
+          <span
+            v-if="overview.forecastMark"
+            class="forecast-mark"
+            :class="overview.forecastMark"
+            :aria-label="overview.forecastMark === 'hit' ? '这期预测中了' : '这期预测未中'"
+          >{{ overview.forecastMark === "hit" ? "中" : "未中" }}</span>
+        </div>
+        <p class="latest-meta">{{ overview.latest ? `第 ${overview.latest.issue} 期 · ${overview.latest.drawDate} ${overview.latest.week}` : "还没有开奖数据" }}</p>
+        <p class="latest-sub">{{ overview.latest ? `${overview.latest.parity} · ${overview.latest.size} · 和值 ${overview.latest.sum} · 跨度 ${overview.latest.span}` : "先同步近 500 期" }}</p>
+      </section>
+      <article class="dash-card">
+        <header><b>近 {{ sums.length }} 期和值</b><span>按时间从早到晚</span></header>
+        <div v-if="sums.length" class="col-chart" aria-label="近10期和值">
+          <i v-for="item in sums" :key="item.issue" :style="{ height: item.height }" :title="`第 ${item.issue} 期 和值 ${item.sum}`"><em>{{ item.sum }}</em></i>
+        </div>
+        <p v-else class="quiet">同步后显示走势。</p>
+      </article>
+      <article class="dash-card">
+        <header><b>三个彩种</b><span>点击切换</span></header>
+        <button
+          v-for="item in peers"
+          :key="item.code"
+          type="button"
+          class="peer-row"
+          :class="{ on: item.code === overview.lottery.code }"
+          @click="switchLottery(item.code)"
+        >
+          <span class="avatar">{{ item.name.slice(0, 1) }}</span>
+          <span class="peer-meta"><b>{{ item.name }}</b><small>第 {{ item.latest.issue }} 期 · {{ item.latest.drawDate }}</small></span>
+          <MiniBalls :digits="item.latest.digits" />
+        </button>
+        <p v-if="!peers.length" class="quiet">其他彩种摘要暂时没有读到。</p>
+      </article>
+      <article class="dash-card board-kpis">
+        <div class="kpi-row">
+          <KpiCard label="本地期数" :value="overview.drawCount" />
+          <KpiCard label="官网期数" :value="overview.remoteTotal || '—'" />
+          <KpiCard label="统计窗口" :value="overview.window" hint="期" />
+          <KpiCard label="规则" :value="overview.rules.length" />
+        </div>
+      </article>
+    </div>
+    <section class="dash-card board-wide">
       <div class="section-head">
         <div>
-          <h2>规则</h2>
-          <p class="quiet">{{ windowNote }} 统计用了 {{ formatElapsed(overview.elapsedMs) }}。</p>
+          <h2>近 {{ overview.recent.length }} 期</h2>
+          <p class="quiet">号码按位置展示。频次只统计这 {{ overview.recent.length }} 期，不是预测。</p>
+        </div>
+      </div>
+      <div v-if="overview.recent.length" class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>期号</th><th>日期</th><th>号码</th><th>单双</th><th>和值</th><th>跨度</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="draw in overview.recent" :key="draw.issue">
+              <td>{{ draw.issue }}</td>
+              <td>{{ draw.drawDate }}</td>
+              <td><MiniBalls :digits="draw.digits" /></td>
+              <td>{{ draw.parity }}</td>
+              <td>{{ draw.sum }}</td>
+              <td>{{ draw.span }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="quiet">同步后显示在这里。</p>
+      <div v-if="frequencies.length" class="freq-grid" style="margin-top: 12px">
+        <article v-for="position in frequencies" :key="position.name" class="freq-card">
+          <h3>{{ position.name }} · 近 {{ overview.recent.length }} 期出现次数</h3>
+          <div v-for="bar in position.bars" :key="bar.digit" class="freq-row">
+            <span>{{ bar.digit }}</span>
+            <span class="freq-track"><i :style="{ width: bar.width }"></i></span>
+            <span>{{ bar.count }}</span>
+          </div>
+        </article>
+      </div>
+    </section>
+    <section class="dash-card board-wide">
+      <h2>数据同步</h2>
+      <p class="quiet">{{ windowNote }} 统计用了 {{ formatElapsed(overview.elapsedMs) }}。{{ status }}</p>
+      <div class="range-row">
+        <span>近</span>
+        <input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @input="onRangeInput" />
+        <span>期</span>
+      </div>
+      <div class="presets">
+        <button v-for="value in presets" :key="value" class="btn ghost small" type="button" @click="setN(value)">{{ value }}</button>
+        <button class="btn ghost small" type="button" @click="setN('all')">全部</button>
+      </div>
+      <div v-if="session.user?.canOperate" class="actions">
+        <button class="btn gold" type="button" :disabled="busy" @click="runSync('auto')">{{ overview.drawCount ? "同步最新" : "获取近 500 期" }}</button>
+        <button class="btn ghost" type="button" :disabled="busy || !overview.drawCount" @click="runSync('backfill')">向前补 500 期</button>
+      </div>
+      <p v-else class="quiet">同步由可操作的账号执行。</p>
+    </section>
+    <section class="board-wide">
+      <div class="section-head">
+        <div>
+          <h2>规则统计</h2>
+          <p class="quiet">次数只看当前窗口。遗漏从最新一期往前看全部在库数据。</p>
         </div>
         <button v-if="session.user?.canOperate" class="btn gold small" type="button" @click="openCreate">新建规则</button>
       </div>
@@ -242,33 +364,6 @@ onUnmounted(() => {
         </article>
       </div>
     </section>
-    <details class="panel fold">
-      <summary>数据 · 近 {{ n }} 期 · 本地 {{ overview.drawCount }} 期</summary>
-      <div class="range-row">
-        <span>近</span>
-        <input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @input="onRangeInput" />
-        <span>期</span>
-      </div>
-      <div class="presets">
-        <button v-for="value in presets" :key="value" class="btn ghost small" type="button" @click="setN(value)">{{ value }}</button>
-        <button class="btn ghost small" type="button" @click="setN('all')">全部</button>
-      </div>
-      <h2>数据同步</h2>
-      <div v-if="session.user?.canOperate" class="actions">
-        <button class="btn gold" type="button" :disabled="busy" @click="runSync('auto')">{{ overview.drawCount ? "同步最新" : "获取近 500 期" }}</button>
-        <button class="btn ghost" type="button" :disabled="busy || !overview.drawCount" @click="runSync('backfill')">向前补 500 期</button>
-      </div>
-      <p v-else class="quiet">同步由可操作的账号执行。</p>
-      <p class="status quiet">{{ status }}</p>
-      <h3>最近开奖（{{ overview.recent.length }} 期）</h3>
-      <ul v-if="overview.recent.length" class="recent">
-        <li v-for="draw in overview.recent" :key="draw.issue">
-          <span><b>{{ draw.issue }}</b><br><span class="quiet">{{ draw.drawDate }}</span></span>
-          <MiniBalls :digits="draw.digits" />
-        </li>
-      </ul>
-      <p v-else class="quiet">同步后显示在这里。</p>
-    </details>
   </template>
 
   <RuleEditor

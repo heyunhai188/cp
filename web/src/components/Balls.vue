@@ -1,4 +1,6 @@
 <script setup>
+import NumberBall from "./NumberBall.vue";
+
 defineProps({
   digits: { type: Array, default: () => ["·", "·", "·"] },
   dim: Boolean,
@@ -6,7 +8,5 @@ defineProps({
 </script>
 
 <template>
-  <div class="balls" :class="{ wide: digits.length > 3 }">
-    <span v-for="(digit, index) in digits" :key="index" class="ball" :class="{ dim }">{{ digit }}</span>
-  </div>
+  <NumberBall :digits="digits" :dim="dim" size="md" />
 </template>

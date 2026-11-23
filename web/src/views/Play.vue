@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { request } from "../api.js";
 import { PLAY_LOTTERIES, currentLottery } from "../lottery.js";
@@ -14,6 +14,9 @@ const picks = ref([]);
 const lines = ref([]);
 const multiple = ref(1);
 const slipOpen = ref(false);
+const confirming = ref(false);
+const records = ref([]);
+const lastResult = ref(null);
 const error = ref("");
 const multipleError = ref("");
 const saving = ref(false);
@@ -33,6 +36,10 @@ const slipStake = computed(() => multipleValid.value ? slipBets.value * 2 * Numb
 const shortfall = computed(() => Math.max(0, slipStake.value - (board.value?.balance || 0)));
 const hasCurrentSelection = computed(() => picks.value.some((bag) => bag.length > 0));
 const missingPosition = computed(() => hasCurrentSelection.value ? picks.value.findIndex((bag) => !bag.length) : -1);
+const draftReady = computed(() => hasCurrentSelection.value && missingPosition.value < 0 && bets.value > 0);
+const previewBets = computed(() => slipBets.value + (confirming.value || !draftReady.value ? 0 : bets.value));
+const previewStake = computed(() => multipleValid.value ? previewBets.value * 2 * Number(multiple.value) : 0);
+const previewShortfall = computed(() => Math.max(0, previewStake.value - (board.value?.balance || 0)));
 const MAX_LINES = 50;
 const GROUPS = [
   { id: "big", label: "大", digits: [5, 6, 7, 8, 9] },
@@ -50,6 +57,7 @@ async function load() {
   if (code.value !== "self3d") localStorage.setItem("lottery.code", code.value);
   lines.value = [];
   slipOpen.value = false;
+  confirming.value = false;
   multiple.value = 1;
   error.value = "";
   syncNote.value = "";
@@ -57,8 +65,18 @@ async function load() {
   try {
     board.value = await request(`/api/play?lottery=${code.value}`);
     emptyPicks(board.value.lottery.digits);
+    await loadRecords();
   } catch (err) {
     error.value = err.message || "读取失败";
+  }
+}
+
+async function loadRecords() {
+  try {
+    const data = await request("/api/orders");
+    records.value = data.orders.filter((order) => order.lotteryCode === code.value).slice(0, 8);
+  } catch {
+    records.value = [];
   }
 }
 
@@ -116,56 +134,81 @@ function addRandom(count) {
   slipOpen.value = true;
 }
 
-async function openSlip() {
-  if (!board.value?.balance) {
-    error.value = "余额不足，暂时无法继续模拟下单。";
-    slipOpen.value = false;
-    return;
-  }
+function stageCurrent() {
+  confirming.value = false;
+  if (!board.value) return false;
   if (hasCurrentSelection.value) {
-    const emptyIndex = missingPosition.value;
-    if (emptyIndex >= 0) {
-      error.value = `请先选择第 ${emptyIndex + 1} 位号码。`;
-      slipOpen.value = false;
-      return;
+    if (missingPosition.value >= 0) {
+      error.value = `请先选择${board.value.lottery.positions?.[missingPosition.value] || `第 ${missingPosition.value + 1} 位`}号码。`;
+      return false;
     }
-  } else if (!lines.value.length) {
-    error.value = "请先选择号码，再点击选好了。";
-    slipOpen.value = false;
-    return;
-  }
-  if (!board.value.local && !board.value.latest) {
-    error.value = "当前没有可用的开奖结果，暂时无法下单。";
-    slipOpen.value = false;
-    return;
-  }
-  if (hasCurrentSelection.value) {
     if (lines.value.length >= MAX_LINES) {
       error.value = `号码明细最多添加 ${MAX_LINES} 组，请先删掉一些号码。`;
-      slipOpen.value = false;
-      return;
+      return false;
     }
     lines.value.push({ selection: picks.value.map((bag) => [...bag]) });
     emptyPicks(board.value.lottery.digits);
   }
-  if (!lines.value.length) return;
+  if (!lines.value.length) {
+    error.value = "请先选择号码。";
+    return false;
+  }
+  if (!board.value.local && !board.value.latest) {
+    error.value = "当前没有可用的开奖结果，暂时无法下单。";
+    return false;
+  }
   error.value = "";
+  return true;
+}
+
+async function askConfirm() {
+  if (!stageCurrent()) return;
   try {
     await refreshBalance();
   } catch (err) {
     error.value = err.message || "读取余额失败";
+    return;
   }
-  slipOpen.value = true;
+  if (!board.value?.balance || shortfall.value > 0) {
+    error.value = !board.value?.balance ? "余额不足，暂时无法下单。" : `余额不足，还差 ${shortfall.value} 元。`;
+    return;
+  }
+  confirming.value = true;
+}
+
+async function openSlip() {
+  await askConfirm();
 }
 
 function removeLine(index) {
   error.value = "";
+  confirming.value = false;
   lines.value.splice(index, 1);
 }
 
 function clearLines() {
   error.value = "";
+  confirming.value = false;
   lines.value = [];
+}
+
+function statusText(order) {
+  if (order.status === "pending") return "待开奖";
+  if (order.status === "hit") return "中了";
+  if (order.status === "cancelled") return "已撤销";
+  return "未中";
+}
+
+async function cancelRecord(order) {
+  if (!window.confirm(`撤销这注 ${order.stake} 元？截止前会退回余额。`)) return;
+  error.value = "";
+  try {
+    const data = await request(`/api/orders/${order.id}/cancel`, { method: "POST" });
+    if (board.value) board.value.balance = data.balance;
+    await loadRecords();
+  } catch (err) {
+    error.value = err.message || "撤销失败";
+  }
 }
 
 function wait(ms) {
@@ -278,10 +321,15 @@ function editLine(index) {
   if (!line || !board.value) return;
   picks.value = line.selection.map((bag) => [...bag]);
   lines.value.splice(index, 1);
+  confirming.value = false;
   slipOpen.value = false;
 }
 
 async function submit() {
+  if (!confirming.value) {
+    await askConfirm();
+    return;
+  }
   error.value = "";
   if (saving.value) return;
   if (!lines.value.length) {
@@ -324,14 +372,22 @@ async function submit() {
     const count = placed.orders?.length || lines.value.length;
     lines.value = [];
     slipOpen.value = false;
+    confirming.value = false;
     multiple.value = 1;
     emptyPicks(board.value.lottery.digits);
+    lastResult.value = { count, orders: placed.orders || [], local: Boolean(local) };
+    placedNote.value = local ? `已提交 ${count} 注，正在开奖` : `已提交 ${count} 注，开奖后自动兑奖`;
+    await loadRecords();
     if (local) {
-      placedNote.value = `已提交 ${count} 注，正在开奖`;
       await animateDraw();
+      await loadRecords();
+      const settled = new Map(records.value.map((order) => [order.id, order]));
+      lastResult.value = {
+        ...lastResult.value,
+        orders: lastResult.value.orders.map((order) => settled.get(order.id) || order),
+      };
       placedNote.value = "";
     } else {
-      placedNote.value = `已提交 ${count} 注，开奖后自动兑奖`;
       await refreshBalance();
     }
   } catch (err) {
@@ -356,118 +412,122 @@ onUnmounted(stopSpin);
 </script>
 
 <template>
-  <p v-if="error && !slipOpen" class="banner bet-error" role="alert">{{ error }}</p>
+  <p v-if="error" class="banner" role="alert">{{ error }}</p>
   <p v-else-if="placedNote && !reveal" class="play-toast" role="status">{{ placedNote }}</p>
-  <div class="play-top">
-    <div class="play-lotteries">
-      <button v-for="item in PLAY_LOTTERIES" :key="item.code" type="button" :class="{ on: item.code === code }" @click="code = item.code">{{ item.name }}</button>
-    </div>
-  </div>
-  <section v-if="board" class="play-sheet">
-    <div class="play-head">
-      <span class="play-mode">直选</span>
-      <span>
-        <button v-if="lines.length" class="text-btn" type="button" @click="slipOpen = true">明细 {{ lines.length }}</button>
-        <RouterLink to="/orders">订单</RouterLink>
-      </span>
-    </div>
-    <div class="draw-line">
-      <template v-if="board.latest">
-        <span class="draw-tag">开奖</span>
-        <span>第{{ board.latest.issue }}期</span>
-        <b v-for="(digit, index) in board.latest.digits" :key="index">{{ digit }}</b>
-      </template>
-      <span v-else class="quiet">{{ board.local ? "还没有开过奖" : "还没有开奖" }}</span>
-      <button class="text-btn" type="button" :aria-expanded="recentOpen" @click="recentOpen = !recentOpen">{{ recentOpen ? "关闭" : "近10期" }}</button>
-    </div>
-    <ul v-if="recentOpen" class="recent-draws">
-      <li v-if="!board.recent?.length" class="quiet">还没有开奖记录。</li>
-      <li v-for="row in board.recent" :key="row.issue">
-        <span>第{{ row.issue }}期</span>
-        <b v-for="(digit, index) in row.digits" :key="index">{{ digit }}</b>
-        <small>{{ row.drawDate }}</small>
-      </li>
-    </ul>
-    <div class="play-summary">
-      <div v-if="board.local" class="play-target"><span>下一期</span><strong>第{{ board.nextIssue }}期</strong><button class="btn gold small" type="button" :disabled="drawing || !board.pendingCount" @click="drawNow">{{ drawing ? "开奖中…" : `开奖（${board.pendingCount} 笔未开）` }}</button></div>
-      <div v-else-if="board.upcoming" class="play-target"><span>本次模拟期号</span><strong>第{{ board.upcoming.issue }}期</strong><b>{{ board.upcoming.label }} {{ board.upcoming.time }} 截止</b></div>
-      <div class="play-balance"><span>可用模拟金额</span><strong>{{ board.balance }}<small>元</small></strong></div>
-    </div>
-    <p v-if="bets > 1" class="banner">这一注是 {{ bets }} 注、{{ stake }} 元。中奖只按 1 注奖金算。</p>
-    <details class="fold play-rules"><summary>{{ board.local ? "自开规则" : "模拟规则与开奖同步" }}</summary>
-      <template v-if="board.local">
-        <p>自开3D只属于当前账号。可以先下多注，未开奖前能撤单退款。点开奖后，系统生成 000 到 999 中的一个号，并把这些未开奖的注一起兑奖。单注奖金 {{ board.prizes?.self3d ?? 1040 }} 元，中奖后再乘倍数。复式按注数扣款，命中只返一注奖金。</p>
-        <p v-if="syncNote">{{ syncNote }}</p>
-      </template>
-      <template v-else>
-        <p>每注按 2 元乘倍数扣除。当前账号的单注奖金是福彩3D {{ board.prizes?.fc3d ?? "—" }} 元、排列三 {{ board.prizes?.pl3 ?? "—" }} 元、排列五 {{ board.prizes?.pl5 ?? "—" }} 元，中奖后再乘倍数。复式组合按注数扣款，命中时只返一注奖金。没单独配置时默认是 1040、1040、100000。模拟结果不代表真实派奖。</p>
-        <p>订单可在该彩种截止时间前撤销，撤销后退回模拟金额。开奖同步后会自动核对订单，不必自己再点一次。</p>
-        <p class="play-sync"><button class="text-btn" type="button" :disabled="syncing" @click="syncDraws">{{ syncing ? "正在同步…" : "现在同步开奖" }}</button><span v-if="syncNote">{{ syncNote }}</span></p>
-      </template>
-    </details>
-    <div class="play-head">
-      <span>每位至少选择 1 个号码</span>
-      <button class="random" type="button" @click="randomize">机选</button>
-    </div>
-    <section v-for="(bag, index) in picks" :key="index">
-      <h3>第{{ index + 1 }}位</h3>
-      <div class="traits">
-        <button v-for="group in GROUPS" :key="group.id" type="button" :class="{ on: groupOn(bag, group.digits) }" @click="applyGroup(index, group.digits)">{{ group.label }}</button>
+  <div v-if="board" class="play-board">
+    <aside class="play-side dash-card">
+      <h2>彩种</h2>
+      <div class="play-choices">
+        <button v-for="item in PLAY_LOTTERIES" :key="item.code" type="button" :class="{ on: item.code === code }" @click="code = item.code">{{ item.name }}</button>
       </div>
-      <div class="pad">
-        <button v-for="digit in 10" :key="digit" type="button" class="num" :class="{ on: bag.includes(digit - 1) }" @click="toggle(index, digit - 1)">{{ digit - 1 }}</button>
+      <h2>玩法</h2>
+      <div class="play-choices">
+        <button type="button" class="on">直选</button>
       </div>
-    </section>
-  </section>
-  <div class="bet-bar">
-    <button class="clear" type="button" @click="clearPicks">清空</button>
-    <span class="sum"><template v-if="hasCurrentSelection && missingPosition >= 0">请补选第 {{ missingPosition + 1 }} 位</template><template v-else-if="lines.length">已选 {{ slipBets }} 注待确认</template><template v-else-if="hasCurrentSelection">已选 {{ bets }} 注，共 {{ stake }} 元</template><template v-else>请先选择号码</template></span>
-    <button class="ok" type="button" :disabled="!board || saving" @click="openSlip">选好了</button>
-  </div>
+      <p class="quiet">每位可选 1 个或多个号。注数是各位个数相乘，每注 2 元，再乘倍数。</p>
+      <div class="play-side-meta">
+        <span>可用余额</span>
+        <strong>{{ board.balance }}<small>元</small></strong>
+      </div>
+      <div v-if="board.latest" class="play-side-draw">
+        <span>最新开奖 · {{ board.latest.issue }}</span>
+        <b>{{ board.latest.digits.join(" ") }}</b>
+      </div>
+      <p v-if="board.local" class="quiet">自开3D只属于当前账号。选号后提交，再在本页开奖。</p>
+      <p v-else-if="board.upcoming" class="quiet">第 {{ board.upcoming.issue }} 期 · {{ board.upcoming.label }} {{ board.upcoming.time }} 截止</p>
+      <button v-if="board.local" class="btn gold small" type="button" :disabled="drawing || !board.pendingCount" @click="drawNow">{{ drawing ? "开奖中…" : `开奖（${board.pendingCount} 笔未开）` }}</button>
+      <button v-else class="btn ghost small" type="button" :disabled="syncing" @click="syncDraws">{{ syncing ? "正在同步…" : "同步开奖" }}</button>
+      <p v-if="syncNote" class="quiet">{{ syncNote }}</p>
+    </aside>
 
-  <section v-if="slipOpen" class="slip">
-    <header class="slip-head">
-      <strong>明细</strong>
-      <button type="button" @click="clearLines">清空所有</button>
-      <button type="button" class="slip-x" @click="slipOpen = false">×</button>
-    </header>
-    <div class="slip-actions">
-      <button type="button" @click="addRandom(1)">+机选1注</button>
-      <button type="button" @click="addRandom(5)">+机选5注</button>
-      <button type="button" @click="slipOpen = false">+继续选号</button>
-    </div>
-    <div class="slip-body">
-      <article class="ticket">
-        <h3>直选</h3>
-        <p v-if="!lines.length" class="quiet">还没有号码。可以机选，或返回继续选号。</p>
+    <section class="play-sheet">
+      <div class="play-head">
+        <span>{{ board.lottery.name }} · 直选</span>
+        <span class="quiet" v-if="draftReady">当前 {{ bets }} 注 · {{ stake }} 元</span>
+        <span class="quiet" v-else-if="missingPosition >= 0">请补选{{ board.lottery.positions?.[missingPosition] || `第 ${missingPosition + 1} 位` }}</span>
+      </div>
+      <div class="play-tools">
+        <button class="btn ghost small" type="button" @click="randomize">机选</button>
+        <button class="btn ghost small" type="button" @click="clearPicks">清空</button>
+        <button class="btn ghost small" type="button" @click="clearPicks(); randomize()">重新选择</button>
+      </div>
+      <section v-for="(bag, index) in picks" :key="index" class="play-position">
+        <h3>{{ board.lottery.positions?.[index] || `第${index + 1}位` }}</h3>
+        <div class="traits">
+          <button v-for="group in GROUPS" :key="group.id" type="button" :class="{ on: groupOn(bag, group.digits) }" @click="applyGroup(index, group.digits)">{{ group.label }}</button>
+        </div>
+        <div class="pad">
+          <button v-for="digit in 10" :key="digit" type="button" class="num" :class="{ on: bag.includes(digit - 1) }" @click="toggle(index, digit - 1)">{{ digit - 1 }}</button>
+        </div>
+      </section>
+      <p v-if="bets > 1" class="quiet">这一注是 {{ bets }} 注、{{ stake }} 元。复式按注数扣款，命中只返一注奖金。</p>
+    </section>
+
+    <aside class="ticket-pane dash-card">
+      <header class="slip-head">
+        <strong>模拟投注单</strong>
+        <button type="button" @click="clearLines">清空</button>
+      </header>
+      <div class="slip-actions">
+        <button type="button" @click="addRandom(1)">机选 1 注</button>
+        <button type="button" @click="addRandom(5)">机选 5 注</button>
+        <button type="button" @click="stageCurrent">加入当前选号</button>
+      </div>
+      <div class="slip-body">
+        <article v-if="hasCurrentSelection && !confirming" class="draft-line">
+          <b>正在选</b>
+          <p>
+            <template v-for="(bag, index) in picks" :key="index">
+              <span v-if="index"> · </span>{{ board.lottery.positions?.[index] || `第${index + 1}位` }} {{ bag.join("") || "—" }}
+            </template>
+          </p>
+          <p class="quiet">{{ draftReady ? `${bets} 注 · ${stake} 元，确认时会并入投注单` : "号码还没选完" }}</p>
+        </article>
+        <p v-if="!lines.length && !hasCurrentSelection" class="quiet">选号后，注数和金额会显示在这里。</p>
         <div v-for="(line, lineIndex) in lines" :key="lineIndex" class="slip-line">
           <button type="button" :aria-label="`移除第 ${lineIndex + 1} 组号码`" @click="removeLine(lineIndex)">×</button>
           <button type="button" class="slip-edit" @click="editLine(lineIndex)">
             <template v-for="(bag, index) in line.selection" :key="index">
-              <span v-if="index"> | </span>第{{ index + 1 }}位 <b>{{ bag.join("") }}</b>
+              <span v-if="index"> | </span>{{ board.lottery.positions?.[index] || `第${index + 1}位` }} <b>{{ bag.join("") }}</b>
             </template>
           </button>
         </div>
-      </article>
-    </div>
-    <footer class="slip-bar">
-      <div class="mult">
-        <span>倍数</span>
-        <button type="button" @click="changeMultiple(-1)">−</button>
-        <input v-model="multiple" inputmode="numeric" aria-label="倍数" @input="clearMultipleError" @change="commitMultiple">
-        <button type="button" @click="changeMultiple(1)">+</button>
       </div>
-      <div class="slip-submit">
-        <span>共 {{ slipBets }} 注 · {{ slipStake }} 元</span>
-        <button type="button" :disabled="saving" @click="submit">{{ saving ? "提交中…" : "确认模拟下单" }}</button>
-      </div>
-      <p v-if="board?.upcoming">第{{ board.upcoming.issue }}期 · {{ board.upcoming.label }} {{ board.upcoming.time }} 截止</p>
-      <p v-else-if="board?.local">确认后立即开奖，并在本页显示中奖或未中。</p>
-      <p v-if="multipleError" class="slip-validation" role="alert">{{ multipleError }}</p>
-      <p v-if="error" class="slip-validation" role="alert">{{ error }}</p>
-      <p v-if="multipleValid">{{ !board?.balance ? "余额不足，暂时无法下单" : shortfall ? `余额不足，还差 ${shortfall} 元` : `确认后将扣除 ${slipStake} 元，剩余 ${board.balance - slipStake} 元` }}</p>
-    </footer>
-  </section>
+      <footer class="slip-bar" :class="{ confirming }">
+        <div class="mult">
+          <span>倍数</span>
+          <button type="button" @click="changeMultiple(-1)">−</button>
+          <input v-model="multiple" inputmode="numeric" aria-label="倍数" @input="clearMultipleError(); confirming = false" @change="commitMultiple">
+          <button type="button" @click="changeMultiple(1)">+</button>
+        </div>
+        <div class="confirm-summary">
+          <p><b>{{ board.lottery.name }} · 直选</b></p>
+          <p v-if="board.upcoming">第 {{ board.upcoming.issue }} 期 · {{ board.upcoming.time }} 截止</p>
+          <p v-else-if="board.local">第 {{ board.nextIssue }} 期 · 提交后可立即开奖</p>
+          <p>{{ previewBets }} 注 × {{ multipleValid ? multiple : "—" }} 倍 = <strong>{{ previewStake }} 元</strong></p>
+          <p v-if="multipleValid">{{ previewShortfall ? `余额不足，还差 ${previewShortfall} 元` : `确认后余额 ${Math.max(0, board.balance - previewStake)} 元` }}</p>
+        </div>
+        <p v-if="multipleError" class="slip-validation" role="alert">{{ multipleError }}</p>
+        <div class="slip-submit">
+          <button v-if="confirming" type="button" @click="confirming = false">返回修改</button>
+          <button type="button" :disabled="saving || !previewBets" @click="submit">{{ saving ? "提交中…" : confirming ? "确认提交" : "提交模拟" }}</button>
+        </div>
+      </footer>
+      <section v-if="lastResult" class="play-result">
+        <b>{{ lastResult.orders.some((order) => order.status === "pending") ? "已提交，等待开奖" : "已开奖" }} {{ lastResult.count }} 注</b>
+        <p v-for="order in lastResult.orders" :key="order.id" class="quiet">第 {{ order.targetIssue || order.basedIssue }} 期 · {{ order.stake }} 元 · {{ statusText(order) }}</p>
+      </section>
+      <section class="play-records">
+        <h3>最近记录</h3>
+        <p v-if="!records.length" class="quiet">这个彩种还没有模拟记录。</p>
+        <article v-for="order in records" :key="order.id" class="record-row">
+          <span><b>{{ order.selection.map((bag) => bag.join("")).join(" ") }}</b><small>第 {{ order.targetIssue || order.basedIssue }} 期 · {{ order.stake }} 元</small></span>
+          <em :class="order.status">{{ statusText(order) }}</em>
+          <button v-if="order.cancellable" class="text-btn" type="button" @click="cancelRecord(order)">撤销</button>
+        </article>
+      </section>
+    </aside>
+  </div>
 
   <section v-if="reveal" class="draw-show" role="dialog" aria-modal="true" :aria-label="reveal.phase === 'spin' ? '正在开奖' : (reveal.hit ? '中奖' : '未中')">
     <div class="draw-card" :class="reveal.phase === 'result' ? (reveal.hit ? 'hit' : 'miss') : 'spin'">

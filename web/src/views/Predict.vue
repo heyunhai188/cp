@@ -6,6 +6,7 @@ import { session } from "../session.js";
 import { LOTTERIES, currentLottery, predictRange } from "../lottery.js";
 import { clampN, formatStamp } from "../format.js";
 import Balls from "../components/Balls.vue";
+import LotterySwitch from "../components/LotterySwitch.vue";
 import ExpertBoard from "../components/ExpertBoard.vue";
 import SectionTabs from "../components/SectionTabs.vue";
 import Backtest from "./Backtest.vue";
@@ -192,25 +193,16 @@ function setSection(id) {
 
 <template>
   <header class="page-hero predict-lottery">
-    <p class="lede">先选彩种。本期号码、专家推荐、存档核对、向前回测都会换成这个彩种。</p>
-    <div class="lottery-switch" role="group" aria-label="彩种">
-      <button
-        v-for="item in LOTTERIES"
-        :key="item.code"
-        type="button"
-        class="btn ghost small"
-        :class="{ on: item.code === lottery }"
-        :aria-pressed="item.code === lottery"
-        @click="switchLottery(item.code)"
-      >{{ item.name }}</button>
-    </div>
+    <p class="lede">预测结果来自历史统计，不是确定性中奖号码。</p>
+    <LotterySwitch :items="LOTTERIES" :model-value="lottery" @update:model-value="switchLottery" />
   </header>
+  <p class="disclaimer">历史排序、冷热和回测只描述已经开出的数据，不能提高中奖概率。</p>
   <p v-if="error && section !== 'backtest'" class="banner">{{ error }}</p>
   <SectionTabs :tabs="SECTIONS" :model-value="section" @update:model-value="setSection" />
   <template v-if="section === 'picks'">
   <p v-if="!lotteryReady" class="quiet">正在读取{{ lotteryName }}…</p>
   <template v-else>
-  <p class="quiet">近 {{ n }} 期加权排序 · 每位 {{ k || "默认" }} 个。历史排序仅供参考，不代表提高中奖概率。</p>
+  <p class="quiet">近 {{ n }} 期加权排序 · 每位 {{ k || "默认" }} 个。</p>
   <section class="panel predict-controls">
     <details class="fold predict-options"><summary>设置 · 近 {{ n }} 期 · 每位 {{ k || "默认" }} 个</summary>
     <div class="range-row"><span>近</span><input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @change="commitRange" /><span>期</span></div>
@@ -228,28 +220,31 @@ function setSection(id) {
   <p class="quiet">{{ note }}</p>
   <template v-if="data?.window">
     <section class="predict-block">
+      <p class="eyebrow">预测结果</p>
       <h2>复式推荐</h2>
       <article v-if="data.joint?.compound" class="panel compound-pick">
         <h2>综合复式 · {{ data.joint.compound.bets }} 注</h2>
-        <p class="compound">{{ compoundLine(data.joint.compound) }}</p>
+        <div class="pos-tags">
+          <span v-for="position in data.joint.compound.positions" :key="position.name"><em>{{ position.name }}</em><b>{{ position.digits.join(" ") }}</b></span>
+        </div>
       </article>
       <div class="predict-compounds">
-        <article v-if="data.hotCompound" class="panel"><h3>热号复式 · {{ data.hotCompound.bets }} 注</h3><p class="compound">{{ compoundLine(data.hotCompound) }}</p></article>
-        <article v-if="data.coldCompound" class="panel"><h3>冷号复式 · {{ data.coldCompound.bets }} 注</h3><p class="compound">{{ compoundLine(data.coldCompound) }}</p></article>
+        <article v-if="data.hotCompound" class="panel"><h3>热号复式 · {{ data.hotCompound.bets }} 注</h3><div class="pos-tags"><span v-for="position in data.hotCompound.positions" :key="position.name"><em>{{ position.name }}</em><b>{{ position.digits.join(" ") }}</b></span></div></article>
+        <article v-if="data.coldCompound" class="panel"><h3>冷号复式 · {{ data.coldCompound.bets }} 注</h3><div class="pos-tags"><span v-for="position in data.coldCompound.positions" :key="position.name"><em>{{ position.name }}</em><b>{{ position.digits.join(" ") }}</b></span></div></article>
       </div>
     </section>
     <section class="predict-block">
       <h2>直选结果</h2>
-      <p class="hint">综合直选与冷热直选。号码为历史排序结果，不代表提高中奖概率。</p>
+      <p class="hint">综合算法与冷热对照是两套结果，都只供对照。</p>
       <div class="predict-tickets">
         <article v-for="item in data.joint?.directs || []" :key="item.name + item.digits.join('')" class="panel predict-ticket"><h2>{{ item.name }}</h2><Balls :digits="item.digits" /><p class="quiet">{{ item.parity }} · 和值 {{ item.sum }} · 跨度 {{ item.span }}<template v-if="item.seen"> · 近窗出现过</template></p></article>
         <article v-for="item in data.directs || []" :key="`hot-${item.name}`" class="panel predict-ticket"><h2>冷热 · {{ item.name }}</h2><Balls :digits="item.digits" /><p class="quiet">{{ item.digits.join("") }}</p></article>
       </div>
     </section>
-    <details class="panel fold predict-block">
-      <summary>冷热对照与位置统计</summary>
+    <section class="panel predict-block">
+      <p class="eyebrow">历史统计</p>
       <h2>冷热对照</h2>
-      <p class="hint">只按单个位置的冷热来组，不看整注形态。</p>
+      <p class="hint">只按单个位置的冷热来组，不看整注形态，也不参与综合打分。</p>
       <div class="predict-tickets">
         <article v-for="item in data.directs" :key="item.name" class="panel predict-ticket">
           <h2>{{ item.name }}</h2>
@@ -257,9 +252,9 @@ function setSection(id) {
           <p class="quiet">{{ item.digits.join("") }}</p>
         </article>
       </div>
-    </details>
-    <details class="panel fold predict-block">
-      <summary>每个位置的冷热频次</summary>
+    </section>
+    <section class="predict-block">
+      <h2>每个位置的冷热频次</h2>
       <div class="predict-ranks">
         <section v-for="position in data.positions" :key="position.name" class="panel">
           <h2>{{ position.name }}</h2>
@@ -279,7 +274,7 @@ function setSection(id) {
           </table>
         </section>
       </div>
-    </details>
+    </section>
   </template>
   </template>
   </template>
@@ -300,6 +295,7 @@ function setSection(id) {
   <template v-else-if="section === 'archive'">
     <section v-if="currentArchive" class="panel archive-card">
       <h2>本期存档 · {{ currentArchive.archive.basedIssue }} 期后</h2>
+      <p class="disclaimer">存档记录的是当时算出的号码。开奖核对只说明历史对错，不是下一期会中。</p>
       <p>依据 {{ currentArchive.archive.basedIssue }} 预测下一期。近 {{ currentArchive.archive.n }} 期，每位 {{ currentArchive.archive.k }} 个号。保存于 {{ formatStamp(currentArchive.archive.createdAt) }}。每天同步到当日开奖后会自动保存下一期预测。开出下一期并同步后，这份就不能再改。</p>
       <p class="compound">综合直选 {{ (currentArchive.saved.jointDirects || []).map((item) => item.digits.join("")).join("、") }}</p>
       <p class="compound">{{ compoundLine(currentArchive.saved.jointCompound) }}</p>
