@@ -1,4 +1,8 @@
+import { ref } from "vue";
+
 // 主题选择按登录账号保存在当前设备，不影响其他用户或共享数据。
+export const activeThemeId = ref("classic");
+
 export const THEMES = [
   { id: "classic", name: "经典紫", note: "当前默认主题", swatch: "linear-gradient(135deg, #a45cc4, #6d248c)" },
   { id: "sport-red", name: "体彩红金", note: "红色主调，金色点缀", swatch: "linear-gradient(135deg, #e45736, #a91f24 58%, #e4b64f)" },
@@ -9,6 +13,7 @@ export const THEMES = [
 
 export function applyTheme(id) {
   const theme = THEMES.some((item) => item.id === id) ? id : "classic";
+  activeThemeId.value = theme;
   document.documentElement.dataset.theme = theme;
   return theme;
 }

@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onMounted, ref, watch } from "vue";
+const HitReport = defineAsyncComponent(() => import("../components/HitReport.vue"));
 import { request } from "../api.js";
 import { LOTTERIES } from "../lottery.js";
 import { session } from "../session.js";
@@ -45,7 +46,6 @@ const cache = ref({});
 const note = ref("");
 const error = ref("");
 const running = ref(false);
-const pickedPoint = ref("");
 let requestId = 0;
 
 const paramsKey = computed(() => `${n.value}|${String(k.value).trim()}`);
@@ -150,7 +150,6 @@ async function load() {
     const data = await request(`/api/backtest?${params}`);
     if (id !== requestId) return;
     error.value = "";
-    pickedPoint.value = "";
     cache.value = { ...cache.value, [lottery.value]: { key: `${n.value}|${k.value}`, result: data.result } };
     if (!data.result.trials) {
       note.value = `${data.result.lottery.name} 库里有 ${data.result.drawCount} 期。近 ${data.result.n} 期回测至少要 ${data.result.n + 1} 期。`;
@@ -188,16 +187,6 @@ function chooseMethod(id) {
 function rememberMoney() {
   localStorage.setItem(`backtest.prize.${lottery.value}`, String(prize.value).trim());
   localStorage.setItem(`backtest.multiple.${lottery.value}`, String(multiple.value).trim());
-}
-
-function pickChart(event) {
-  const current = result.value;
-  const picked = method.value;
-  if (!current?.points?.length || !picked) return;
-  const bounds = event.currentTarget.getBoundingClientRect();
-  const index = Math.min(current.points.length - 1, Math.max(0, Math.floor((event.clientX - bounds.left) / bounds.width * current.points.length)));
-  const point = current.points[index];
-  pickedPoint.value = `${point.date} ${point.issue} ${point.number} ${picked.mask[index] === "1" ? "中" : "未中"}`;
 }
 
 function setN(value) {
@@ -298,29 +287,15 @@ onMounted(load);
       <div class="backtest-bar-row"><span>实际</span><div class="backtest-track"><i class="actual" :style="{ width: `${bars().actual}%` }"></i></div><b>{{ bars().actualText }}</b></div>
       <div class="backtest-bar-row"><span>理论</span><div class="backtest-track"><i class="theory" :style="{ width: `${bars().theory}%` }"></i></div><b>{{ bars().theoryText }}</b></div>
     </div>
-    <details v-if="result.points.length" class="fold backtest-detail"><summary>命中分布与逐期详情</summary><div class="backtest-chart" role="img" :aria-label="`${result.lottery.name} ${method.name} 命中分布，从旧到新`">
-      <svg :viewBox="`0 0 ${result.points.length} 48`" preserveAspectRatio="none" @click="pickChart">
-        <rect v-if="method.longest.length" class="drought" :x="method.longest.start" y="0" :width="method.longest.length" height="48" />
-        <rect
-          v-for="(point, index) in result.points"
-          :key="point.issue"
-          :class="method.mask[index] === '1' ? 'hit' : 'miss'"
-          :x="index"
-          :y="method.mask[index] === '1' ? 4 : 30"
-          width="1"
-          :height="method.mask[index] === '1' ? 40 : 14"
-        >
-          <title>{{ point.date }} {{ point.issue }} {{ point.number }} {{ method.mask[index] === "1" ? "中" : "未中" }}</title>
-        </rect>
-      </svg>
-    </div>
-    <div v-if="result.points.length" class="backtest-scale">
-      <span>{{ result.points[0].date }} {{ result.points[0].issue }}</span>
-      <span>旧 → 新</span>
-      <span>{{ result.points.at(-1).date }} {{ result.points.at(-1).issue }}</span>
-    </div>
-    <p v-if="pickedPoint" class="quiet">{{ pickedPoint }}</p>
-    <p v-if="result.points.length" class="quiet">紫线命中，灰线未中，浅紫色标记最长连续未中。点击图形可查看期号。</p></details>
+    <details v-if="result.points.length" class="fold backtest-detail" open><summary>命中分布与逐期详情</summary>
+      <HitReport
+        :points="result.points"
+        :mask="method.mask"
+        :longest="method.longest"
+        :expected="method.expected"
+        :trials="result.trials"
+      />
+    </details>
     <details v-if="profit" class="fold backtest-detail"><summary>盈亏测算{{ profit.kind === 'numbers' ? ` · ${profit.net > 0 ? '盈利' : profit.net < 0 ? '亏损' : '持平'} ${formatMoney(Math.abs(profit.net))} 元` : '' }}</summary>
     <p v-if="profit.kind === 'help'" class="quiet">{{ profit.text }}</p>
     <div v-else class="backtest-metrics backtest-profit">

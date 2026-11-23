@@ -1,6 +1,8 @@
 <script setup>
 import { computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { NButton, NIcon } from "naive-ui";
+import { HomeOutline, PersonOutline, SearchOutline, TicketOutline, TrendingUpOutline } from "@vicons/ionicons5";
 import { logout, session } from "../session.js";
 import { applyTheme, themeStorageKey } from "../theme.js";
 
@@ -10,12 +12,12 @@ const title = computed(() => route.meta.title || "开奖统计");
 const showBack = computed(() => route.path !== "/");
 const tabs = computed(() => {
   const items = [
-    { to: "/", label: "首页", icon: "home" },
-    { to: "/predict", label: "预测", icon: "predict" },
+    { to: "/", label: "首页", icon: HomeOutline },
+    { to: "/predict", label: "预测", icon: TrendingUpOutline },
   ];
-  if (session.user?.canPlay) items.push({ to: "/play", label: "试玩", icon: "ticket" });
-  else items.push({ to: "/query", label: "查询", icon: "search" });
-  items.push({ to: "/mine", label: "我的", icon: "user" });
+  if (session.user?.canPlay) items.push({ to: "/play", label: "试玩", icon: TicketOutline });
+  else items.push({ to: "/query", label: "查询", icon: SearchOutline });
+  items.push({ to: "/mine", label: "我的", icon: PersonOutline });
   return items;
 });
 
@@ -37,7 +39,6 @@ function active(tab) {
 }
 
 function goBack() {
-  // 浏览器有站内历史就按真实访问顺序返回；直接打开深层链接时回到合适的上级页。
   if (window.history.state?.back) {
     router.back();
     return;
@@ -62,18 +63,28 @@ async function onLogout() {
   <div class="app-frame" :class="{ 'has-nav': !session.user?.mustChangePassword }">
     <header class="app-bar" :class="{ 'has-back': showBack }">
       <strong>{{ title }}</strong>
-      <button v-if="showBack" class="back-trigger" type="button" aria-label="返回上一页" @click="goBack"><span aria-hidden="true">‹</span>返回</button>
-      <RouterLink v-if="session.user?.canManage && !session.user?.mustChangePassword" class="manage-shortcut" to="/manage">管理</RouterLink>
-      <button class="exit" type="button" @click="onLogout">退出</button>
+      <n-button v-if="showBack" text text-color="#ffffff" class="back-trigger" aria-label="返回上一页" @click="goBack"><span aria-hidden="true">‹</span>返回</n-button>
+      <n-button v-if="session.user?.canManage && !session.user?.mustChangePassword" text text-color="#ffffff" class="manage-shortcut" @click="router.push('/manage')">管理</n-button>
+      <n-button text text-color="#ffffff" class="exit" @click="onLogout">退出</n-button>
     </header>
     <main class="page" :class="{ 'play-page': route.path === '/play' }">
       <RouterView />
     </main>
     <nav v-if="!session.user?.mustChangePassword" class="tabbar">
       <p class="side-brand">开奖统计</p>
-      <RouterLink v-for="tab in tabs" :key="tab.to" :to="tab.to" custom v-slot="{ href, navigate }">
-        <a :href="href" :class="{ on: active(tab) }" @click="navigate"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path v-if="tab.icon === 'home'" d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/><path v-else-if="tab.icon === 'predict'" d="M4 18 9 13l3 3 7-9M14 7h5v5"/><path v-else-if="tab.icon === 'search'" d="M10.5 3a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15ZM16 16l5 5"/><path v-else-if="tab.icon === 'ticket'" d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4Zm6 0v2m0 3v2m0 3v2"/><path v-else d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0"/></svg><span>{{ tab.label }}</span></a>
-      </RouterLink>
+      <n-button
+        v-for="tab in tabs"
+        :key="tab.to"
+        quaternary
+        class="tab-btn"
+        :type="active(tab) ? 'primary' : 'default'"
+        @click="router.push(tab.to)"
+      >
+        <span class="tab-item">
+          <n-icon :size="18" :component="tab.icon" />
+          <span>{{ tab.label }}</span>
+        </span>
+      </n-button>
     </nav>
   </div>
 </template>

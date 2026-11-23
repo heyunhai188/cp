@@ -1,4 +1,6 @@
 <script setup>
+import { NTab, NTabs } from "naive-ui";
+
 defineProps({
   tabs: { type: Array, required: true },
   modelValue: { type: String, required: true },
@@ -7,15 +9,7 @@ defineEmits(["update:modelValue"]);
 </script>
 
 <template>
-  <div class="section-tabs" role="tablist">
-    <button
-      v-for="tab in tabs"
-      :key="tab.id"
-      type="button"
-      role="tab"
-      :aria-selected="modelValue === tab.id"
-      :class="{ on: modelValue === tab.id }"
-      @click="$emit('update:modelValue', tab.id)"
-    >{{ tab.label }}</button>
-  </div>
+  <n-tabs class="section-tabs" type="segment" :value="modelValue" @update:value="$emit('update:modelValue', $event)">
+    <n-tab v-for="tab in tabs" :key="tab.id" :name="tab.id">{{ tab.label }}</n-tab>
+  </n-tabs>
 </template>
