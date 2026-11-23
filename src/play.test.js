@@ -8,14 +8,19 @@ import { advanceIssue, countBets, directHit, normalizeSelection, upcomingWindow 
 const dbFile = path.join(os.tmpdir(), `fc3d-play-${process.pid}-${Date.now()}.sqlite`);
 process.env.FC3D_DB = dbFile;
 
-const {
+  const {
   cancelPlayOrder,
   closeDatabase,
   createPlayOrders,
+  createRole,
+  createUser,
+  deleteSelfPlayData,
   dismissPlayOrder,
+  drawSelfPlay,
   initDatabase,
   listPlayOrders,
   listUsers,
+  querySelfDraws,
   setPlayBalance,
   setUserPlayPrizes,
   upsertDraws,
@@ -165,6 +170,48 @@ test("the next stored draw settles the bet even when its issue is not the estima
   assert.equal(order.prize, 100000);
   const summary = listPlayOrders(admin).summary;
   assert.ok(summary.today.prize >= 100000);
+});
+
+test("self3d settles one private draw and a delete refunds only pending stakes", () => {
+  initDatabase();
+  const admin = listUsers()[0];
+  setPlayBalance(admin.id, 100);
+  const role = createRole("管理员", true);
+  const other = createUser({ username: "selfb", password: "secret1", roleId: role.id });
+  setPlayBalance(other.id, 100);
+  const placed = createPlayOrders({
+    userId: admin.id,
+    lotteryCode: "self3d",
+    lines: [[[1], [2], [3]], [[9], [9], [9]]],
+  });
+  assert.equal(placed.orders[0].targetIssue, "1");
+  assert.equal(placed.orders[0].cancellable, true);
+  assert.equal(placed.balance, 96);
+  const cancelled = cancelPlayOrder({ id: placed.orders[1].id, account: admin });
+  assert.equal(cancelled.balance, 98);
+  assert.throws(() => drawSelfPlay({ userId: other.id }), /还没有未开奖的注/);
+  const drawn = drawSelfPlay({ userId: admin.id, digits: [1, 2, 3] });
+  assert.deepEqual(drawn.draw.digits, [1, 2, 3]);
+  assert.equal(drawn.orders.find((order) => order.id === placed.orders[0].id).status, "hit");
+  assert.equal(drawn.orders.find((order) => order.id === placed.orders[0].id).prize, 1040);
+  assert.equal(drawn.balance, 1138);
+  createPlayOrders({ userId: admin.id, lotteryCode: "self3d", selection: [[0], [0], [0]] });
+  const second = drawSelfPlay({ userId: admin.id, digits: [9, 8, 7] });
+  assert.equal(second.draw.issue, "2");
+  assert.equal(second.orders[0].status, "miss");
+  createPlayOrders({ userId: other.id, lotteryCode: "self3d", selection: [[4], [4], [4]] });
+  assert.equal(drawSelfPlay({ userId: other.id, digits: [4, 4, 4] }).draw.issue, "1");
+  assert.deepEqual(querySelfDraws({ userId: admin.id }).rows.map((row) => row.issue), ["2", "1"]);
+  const pending = createPlayOrders({ userId: admin.id, lotteryCode: "self3d", selection: [[7], [7], [7]] });
+  const before = pending.balance;
+  const cleared = deleteSelfPlayData([admin.id]);
+  assert.equal(cleared.refunded, 2);
+  assert.equal(querySelfDraws({ userId: admin.id }).total, 0);
+  assert.equal(querySelfDraws({ userId: other.id }).total, 1);
+  const after = listPlayOrders({ id: admin.id, canManage: true });
+  assert.equal(after.orders.some((order) => order.userId === admin.id && order.lotteryCode === "self3d"), false);
+  assert.equal(after.orders.some((order) => order.userId === other.id && order.lotteryCode === "self3d"), true);
+  assert.equal(after.balance, before + 2);
 });
 
 test.after(() => {

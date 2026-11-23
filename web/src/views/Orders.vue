@@ -128,6 +128,7 @@ onMounted(async () => {
       <option value="fc3d">福彩3D</option>
       <option value="pl3">排列三</option>
       <option value="pl5">排列五</option>
+      <option value="self3d">自开3D</option>
     </select>
     <select v-model="statusFilter" aria-label="按状态筛选">
       <option value="">全部状态</option>
@@ -150,7 +151,8 @@ onMounted(async () => {
     <p class="quiet">{{ order.createdText }} 下单</p>
     <p v-if="order.cancellable && order.deadlineText" class="order-deadline">可撤销至 {{ order.deadlineText }}</p>
     <p v-else-if="order.deadlineText && order.status === 'pending'" class="quiet">撤销截止：{{ order.deadlineText }}（已过截止时间）</p>
-    <p v-if="order.status === 'pending' && order.funded" class="quiet">预计第{{ order.targetIssue }}期，还没同步到开奖。</p>
+    <p v-if="order.status === 'pending' && order.lotteryCode === 'self3d'" class="quiet">第{{ order.targetIssue }}期，回到试玩点开奖后一起兑奖。</p>
+    <p v-else-if="order.status === 'pending' && order.funded" class="quiet">预计第{{ order.targetIssue }}期，还没同步到开奖。</p>
     <p v-else-if="order.status === 'pending'" class="quiet">还没同步到开奖。</p>
     <p v-else-if="order.status === 'cancelled'" class="quiet">已退回 {{ order.stake }} 元。</p>
     <p v-else class="quiet">开奖第{{ order.resultIssue }}期 {{ order.resultDigits.join(" ") }}<template v-if="order.targetIssue && order.resultIssue !== order.targetIssue">（下单时预计 {{ order.targetIssue }}）</template><template v-if="order.status === 'hit'"> · 模拟奖金 {{ order.prize }} 元</template></p>

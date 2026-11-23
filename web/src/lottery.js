@@ -6,6 +6,11 @@ export const LOTTERIES = [
   { code: "pl5", name: "排列五" },
 ];
 
+export const PLAY_LOTTERIES = [
+  ...LOTTERIES,
+  { code: "self3d", name: "自开3D" },
+];
+
 export function currentLottery() {
   return localStorage.getItem("lottery.code") || "fc3d";
 }

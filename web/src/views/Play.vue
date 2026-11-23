@@ -1,11 +1,14 @@
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { request } from "../api.js";
-import { LOTTERIES, currentLottery } from "../lottery.js";
-
-const router = useRouter();
-const code = ref(currentLottery());
+import { PLAY_LOTTERIES, currentLottery } from "../lottery.js";
+function savedPlayCode() {
+  const saved = localStorage.getItem("play.lottery");
+  if (PLAY_LOTTERIES.some((item) => item.code === saved)) return saved;
+  const current = currentLottery();
+  return PLAY_LOTTERIES.some((item) => item.code === current) ? current : "fc3d";
+}
+const code = ref(savedPlayCode());
 const board = ref(null);
 const picks = ref([]);
 const lines = ref([]);
@@ -15,7 +18,12 @@ const error = ref("");
 const multipleError = ref("");
 const saving = ref(false);
 const syncing = ref(false);
+const drawing = ref(false);
 const syncNote = ref("");
+const placedNote = ref("");
+const recentOpen = ref(false);
+const reveal = ref(null);
+let spinTimer = 0;
 
 const bets = computed(() => picks.value.reduce((total, bag) => total * (bag.length || 0), 1));
 const stake = computed(() => bets.value * 2);
@@ -26,17 +34,26 @@ const shortfall = computed(() => Math.max(0, slipStake.value - (board.value?.bal
 const hasCurrentSelection = computed(() => picks.value.some((bag) => bag.length > 0));
 const missingPosition = computed(() => hasCurrentSelection.value ? picks.value.findIndex((bag) => !bag.length) : -1);
 const MAX_LINES = 50;
+const GROUPS = [
+  { id: "big", label: "大", digits: [5, 6, 7, 8, 9] },
+  { id: "small", label: "小", digits: [0, 1, 2, 3, 4] },
+  { id: "odd", label: "单", digits: [1, 3, 5, 7, 9] },
+  { id: "even", label: "双", digits: [0, 2, 4, 6, 8] },
+];
 
 function emptyPicks(digits) {
   picks.value = Array.from({ length: digits }, () => []);
 }
 
 async function load() {
-  localStorage.setItem("lottery.code", code.value);
+  localStorage.setItem("play.lottery", code.value);
+  if (code.value !== "self3d") localStorage.setItem("lottery.code", code.value);
   lines.value = [];
   slipOpen.value = false;
   multiple.value = 1;
   error.value = "";
+  syncNote.value = "";
+  placedNote.value = "";
   try {
     board.value = await request(`/api/play?lottery=${code.value}`);
     emptyPicks(board.value.lottery.digits);
@@ -51,12 +68,27 @@ async function refreshBalance() {
   board.value.balance = data.balance;
   board.value.upcoming = data.upcoming;
   board.value.latest = data.latest;
+  board.value.recent = data.recent;
+  board.value.pendingCount = data.pendingCount;
+  board.value.nextIssue = data.nextIssue;
 }
 
 function toggle(index, digit) {
   error.value = "";
   const bag = picks.value[index];
   picks.value[index] = bag.includes(digit) ? bag.filter((item) => item !== digit) : [...bag, digit].sort((a, b) => a - b);
+}
+
+function groupOn(bag, digits) {
+  return digits.every((digit) => bag.includes(digit));
+}
+
+function applyGroup(index, digits) {
+  error.value = "";
+  const bag = picks.value[index];
+  picks.value[index] = groupOn(bag, digits)
+    ? bag.filter((digit) => !digits.includes(digit))
+    : [...new Set([...bag, ...digits])].sort((a, b) => a - b);
 }
 
 function randomize() {
@@ -102,7 +134,7 @@ async function openSlip() {
     slipOpen.value = false;
     return;
   }
-  if (!board.value.latest) {
+  if (!board.value.local && !board.value.latest) {
     error.value = "当前没有可用的开奖结果，暂时无法下单。";
     slipOpen.value = false;
     return;
@@ -134,6 +166,73 @@ function removeLine(index) {
 function clearLines() {
   error.value = "";
   lines.value = [];
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stopSpin() {
+  if (!spinTimer) return;
+  clearInterval(spinTimer);
+  spinTimer = 0;
+}
+
+function startSpin(count) {
+  stopSpin();
+  reveal.value = {
+    phase: "spin",
+    shown: Array.from({ length: count }, () => Math.floor(Math.random() * 10)),
+    hit: false,
+    prize: 0,
+    issue: "",
+  };
+  spinTimer = setInterval(() => {
+    if (reveal.value?.phase !== "spin") return;
+    reveal.value.shown = reveal.value.shown.map(() => Math.floor(Math.random() * 10));
+  }, 70);
+}
+
+function closeReveal() {
+  stopSpin();
+  reveal.value = null;
+}
+
+async function animateDraw() {
+  const count = board.value?.lottery?.digits || 3;
+  startSpin(count);
+  const started = Date.now();
+  const data = await request("/api/play/draw", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lottery: code.value }),
+  });
+  const remain = 1200 - (Date.now() - started);
+  if (remain > 0) await wait(remain);
+  stopSpin();
+  const prize = data.orders.reduce((sum, order) => sum + (order.status === "hit" ? order.prize : 0), 0);
+  reveal.value = {
+    phase: "result",
+    shown: data.draw.digits,
+    hit: data.orders.some((order) => order.status === "hit"),
+    prize,
+    issue: data.draw.issue,
+  };
+  await refreshBalance();
+}
+
+async function drawNow() {
+  if (drawing.value || !board.value?.local) return;
+  drawing.value = true;
+  error.value = "";
+  try {
+    await animateDraw();
+  } catch (err) {
+    closeReveal();
+    error.value = err.message || "开奖失败";
+  } finally {
+    drawing.value = false;
+  }
 }
 
 async function syncDraws() {
@@ -209,8 +308,9 @@ async function submit() {
     return;
   }
   saving.value = true;
+  let placedOk = false;
   try {
-    await request("/api/orders", {
+    const placed = await request("/api/orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -219,27 +319,48 @@ async function submit() {
         lines: lines.value.map((line) => line.selection),
       }),
     });
-    router.push("/orders");
+    placedOk = true;
+    const local = board.value?.local;
+    const count = placed.orders?.length || lines.value.length;
+    lines.value = [];
+    slipOpen.value = false;
+    multiple.value = 1;
+    emptyPicks(board.value.lottery.digits);
+    if (local) {
+      placedNote.value = `已提交 ${count} 注，正在开奖`;
+      await animateDraw();
+      placedNote.value = "";
+    } else {
+      placedNote.value = `已提交 ${count} 注，开奖后自动兑奖`;
+      await refreshBalance();
+    }
   } catch (err) {
-    error.value = err.message || "下单失败";
-    saving.value = false;
+    closeReveal();
+    error.value = placedOk ? (err.message || "开奖失败") : (err.message || "下单失败");
     try {
       await refreshBalance();
     } catch {
       // 余额刷新失败时仍留下单错误。
     }
+  } finally {
+    saving.value = false;
   }
 }
 
-watch(code, load);
+watch(code, () => {
+  closeReveal();
+  load();
+});
 onMounted(load);
+onUnmounted(stopSpin);
 </script>
 
 <template>
   <p v-if="error && !slipOpen" class="banner bet-error" role="alert">{{ error }}</p>
+  <p v-else-if="placedNote && !reveal" class="play-toast" role="status">{{ placedNote }}</p>
   <div class="play-top">
     <div class="play-lotteries">
-      <button v-for="item in LOTTERIES" :key="item.code" type="button" :class="{ on: item.code === code }" @click="code = item.code">{{ item.name }}</button>
+      <button v-for="item in PLAY_LOTTERIES" :key="item.code" type="button" :class="{ on: item.code === code }" @click="code = item.code">{{ item.name }}</button>
     </div>
   </div>
   <section v-if="board" class="play-sheet">
@@ -250,24 +371,49 @@ onMounted(load);
         <RouterLink to="/orders">订单</RouterLink>
       </span>
     </div>
-    <div v-if="board.latest" class="draw-line">
-      <span class="draw-tag">开奖</span>
-      <span>第{{ board.latest.issue }}期</span>
-      <b v-for="(digit, index) in board.latest.digits" :key="index">{{ digit }}</b>
+    <div class="draw-line">
+      <template v-if="board.latest">
+        <span class="draw-tag">开奖</span>
+        <span>第{{ board.latest.issue }}期</span>
+        <b v-for="(digit, index) in board.latest.digits" :key="index">{{ digit }}</b>
+      </template>
+      <span v-else class="quiet">{{ board.local ? "还没有开过奖" : "还没有开奖" }}</span>
+      <button class="text-btn" type="button" :aria-expanded="recentOpen" @click="recentOpen = !recentOpen">{{ recentOpen ? "关闭" : "近10期" }}</button>
     </div>
-    <p v-else class="quiet">还没有开奖，先同步后再模拟。</p>
+    <ul v-if="recentOpen" class="recent-draws">
+      <li v-if="!board.recent?.length" class="quiet">还没有开奖记录。</li>
+      <li v-for="row in board.recent" :key="row.issue">
+        <span>第{{ row.issue }}期</span>
+        <b v-for="(digit, index) in row.digits" :key="index">{{ digit }}</b>
+        <small>{{ row.drawDate }}</small>
+      </li>
+    </ul>
     <div class="play-summary">
-      <div v-if="board.upcoming" class="play-target"><span>本次模拟期号</span><strong>第{{ board.upcoming.issue }}期</strong><b>{{ board.upcoming.label }} {{ board.upcoming.time }} 截止</b></div>
+      <div v-if="board.local" class="play-target"><span>下一期</span><strong>第{{ board.nextIssue }}期</strong><button class="btn gold small" type="button" :disabled="drawing || !board.pendingCount" @click="drawNow">{{ drawing ? "开奖中…" : `开奖（${board.pendingCount} 笔未开）` }}</button></div>
+      <div v-else-if="board.upcoming" class="play-target"><span>本次模拟期号</span><strong>第{{ board.upcoming.issue }}期</strong><b>{{ board.upcoming.label }} {{ board.upcoming.time }} 截止</b></div>
       <div class="play-balance"><span>可用模拟金额</span><strong>{{ board.balance }}<small>元</small></strong></div>
     </div>
     <p v-if="bets > 1" class="banner">这一注是 {{ bets }} 注、{{ stake }} 元。中奖只按 1 注奖金算。</p>
-    <details class="fold play-rules"><summary>模拟规则与开奖同步</summary><p>每注按 2 元乘倍数扣除。当前账号的单注奖金是福彩3D {{ board.prizes?.fc3d ?? "—" }} 元、排列三 {{ board.prizes?.pl3 ?? "—" }} 元、排列五 {{ board.prizes?.pl5 ?? "—" }} 元，中奖后再乘倍数。复式组合按注数扣款，命中时只返一注奖金。没单独配置时默认是 1040、1040、100000。模拟结果不代表真实派奖。</p><p>订单可在该彩种截止时间前撤销，撤销后退回模拟金额。开奖同步后会自动核对订单，不必自己再点一次。</p><p class="play-sync"><button class="text-btn" type="button" :disabled="syncing" @click="syncDraws">{{ syncing ? "正在同步…" : "现在同步开奖" }}</button><span v-if="syncNote">{{ syncNote }}</span></p></details>
+    <details class="fold play-rules"><summary>{{ board.local ? "自开规则" : "模拟规则与开奖同步" }}</summary>
+      <template v-if="board.local">
+        <p>自开3D只属于当前账号。可以先下多注，未开奖前能撤单退款。点开奖后，系统生成 000 到 999 中的一个号，并把这些未开奖的注一起兑奖。单注奖金 {{ board.prizes?.self3d ?? 1040 }} 元，中奖后再乘倍数。复式按注数扣款，命中只返一注奖金。</p>
+        <p v-if="syncNote">{{ syncNote }}</p>
+      </template>
+      <template v-else>
+        <p>每注按 2 元乘倍数扣除。当前账号的单注奖金是福彩3D {{ board.prizes?.fc3d ?? "—" }} 元、排列三 {{ board.prizes?.pl3 ?? "—" }} 元、排列五 {{ board.prizes?.pl5 ?? "—" }} 元，中奖后再乘倍数。复式组合按注数扣款，命中时只返一注奖金。没单独配置时默认是 1040、1040、100000。模拟结果不代表真实派奖。</p>
+        <p>订单可在该彩种截止时间前撤销，撤销后退回模拟金额。开奖同步后会自动核对订单，不必自己再点一次。</p>
+        <p class="play-sync"><button class="text-btn" type="button" :disabled="syncing" @click="syncDraws">{{ syncing ? "正在同步…" : "现在同步开奖" }}</button><span v-if="syncNote">{{ syncNote }}</span></p>
+      </template>
+    </details>
     <div class="play-head">
       <span>每位至少选择 1 个号码</span>
       <button class="random" type="button" @click="randomize">机选</button>
     </div>
     <section v-for="(bag, index) in picks" :key="index">
       <h3>第{{ index + 1 }}位</h3>
+      <div class="traits">
+        <button v-for="group in GROUPS" :key="group.id" type="button" :class="{ on: groupOn(bag, group.digits) }" @click="applyGroup(index, group.digits)">{{ group.label }}</button>
+      </div>
       <div class="pad">
         <button v-for="digit in 10" :key="digit" type="button" class="num" :class="{ on: bag.includes(digit - 1) }" @click="toggle(index, digit - 1)">{{ digit - 1 }}</button>
       </div>
@@ -316,9 +462,22 @@ onMounted(load);
         <button type="button" :disabled="saving" @click="submit">{{ saving ? "提交中…" : "确认模拟下单" }}</button>
       </div>
       <p v-if="board?.upcoming">第{{ board.upcoming.issue }}期 · {{ board.upcoming.label }} {{ board.upcoming.time }} 截止</p>
+      <p v-else-if="board?.local">确认后立即开奖，并在本页显示中奖或未中。</p>
       <p v-if="multipleError" class="slip-validation" role="alert">{{ multipleError }}</p>
       <p v-if="error" class="slip-validation" role="alert">{{ error }}</p>
       <p v-if="multipleValid">{{ !board?.balance ? "余额不足，暂时无法下单" : shortfall ? `余额不足，还差 ${shortfall} 元` : `确认后将扣除 ${slipStake} 元，剩余 ${board.balance - slipStake} 元` }}</p>
     </footer>
+  </section>
+
+  <section v-if="reveal" class="draw-show" role="dialog" aria-modal="true" :aria-label="reveal.phase === 'spin' ? '正在开奖' : (reveal.hit ? '中奖' : '未中')">
+    <div class="draw-card" :class="reveal.phase === 'result' ? (reveal.hit ? 'hit' : 'miss') : 'spin'">
+      <p class="draw-kicker">第{{ reveal.issue || board?.nextIssue }}期</p>
+      <h2 class="draw-title">{{ reveal.phase === "spin" ? "正在开奖" : (reveal.hit ? "中奖" : "未中") }}</h2>
+      <div class="draw-balls">
+        <b v-for="(digit, index) in reveal.shown" :key="index">{{ digit }}</b>
+      </div>
+      <p v-if="reveal.phase === 'result'" class="draw-prize">{{ reveal.hit ? `奖金 ${reveal.prize} 元` : "没有中奖" }}</p>
+      <button v-if="reveal.phase === 'result'" class="btn gold" type="button" @click="closeReveal">继续选号</button>
+    </div>
   </section>
 </template>

@@ -3,6 +3,7 @@
 // extra_json 用来装星期、销售额，以及以后不想改表的字段。
 import fs from "node:fs";
 import path from "node:path";
+import { randomInt } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { getLottery, LOTTERIES } from "./lottery.js";
@@ -49,6 +50,15 @@ export function initDatabase() {
       extra_json TEXT NOT NULL DEFAULT '{}',
       updated_at TEXT NOT NULL,
       PRIMARY KEY (lottery_code, issue)
+    );
+    CREATE TABLE IF NOT EXISTS self_draws (
+      user_id INTEGER NOT NULL,
+      lottery_code TEXT NOT NULL,
+      issue TEXT NOT NULL,
+      draw_date TEXT NOT NULL,
+      digits TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, lottery_code, issue)
     );
     CREATE INDEX IF NOT EXISTS idx_draws_recent
       ON draws (lottery_code, draw_date DESC, issue DESC);
@@ -473,6 +483,81 @@ export function queryDraws({ lotteryCode = "", issue = "", dateFrom = "", dateTo
   return { total: Number(total) || 0, page, pageSize, rows };
 }
 
+function selfDrawRow(row) {
+  return {
+    lotteryCode: row.lottery_code,
+    issue: row.issue,
+    drawDate: row.draw_date,
+    digits: row.digits.split(",").map(Number),
+    week: "",
+    sales: "",
+  };
+}
+
+function selfDrawByIssue(userId, lotteryCode, issue) {
+  const row = database.prepare(`
+    SELECT lottery_code, issue, draw_date, digits
+    FROM self_draws
+    WHERE user_id = ? AND lottery_code = ? AND issue = ?
+  `).get(userId, lotteryCode, issue);
+  return row ? selfDrawRow(row) : null;
+}
+
+function nextSelfIssue(userId, lotteryCode) {
+  const row = database.prepare(`
+    SELECT issue FROM self_draws
+    WHERE user_id = ? AND lottery_code = ?
+    ORDER BY CAST(issue AS INTEGER) DESC
+    LIMIT 1
+  `).get(userId, lotteryCode);
+  return String((Number(row?.issue) || 0) + 1);
+}
+
+function pendingSelfOrders(userId, lotteryCode) {
+  return database.prepare(`
+    SELECT id, user_id, lottery_code, based_issue, selection, multiple, target_issue, ahead, cancelled_at, prize_credited
+    FROM play_orders
+    WHERE user_id = ? AND lottery_code = ? AND cancelled_at IS NULL AND prize_credited = 0
+  `).all(userId, lotteryCode);
+}
+
+export function querySelfDraws({ userId, issue = "", dateFrom = "", dateTo = "", number = "", page = 1, pageSize = 40 } = {}) {
+  const where = ["user_id = ?", "lottery_code = 'self3d'"];
+  const params = [userId];
+  if (issue) {
+    where.push("issue LIKE ?");
+    params.push(likeContains(issue));
+  }
+  if (dateFrom) {
+    where.push("draw_date >= ?");
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    where.push("draw_date <= ?");
+    params.push(dateTo);
+  }
+  const digits = String(number).replace(/\D/g, "").split("").join(",");
+  if (digits) {
+    where.push("digits LIKE ?");
+    params.push(likeContains(digits));
+  }
+  const clause = `WHERE ${where.join(" AND ")}`;
+  const total = database.prepare(`SELECT COUNT(*) AS n FROM self_draws ${clause}`).get(...params).n;
+  const offset = (page - 1) * pageSize;
+  const rows = database.prepare(`
+    SELECT lottery_code, issue, draw_date, digits
+    FROM self_draws
+    ${clause}
+    ORDER BY CAST(issue AS INTEGER) DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset).map(selfDrawRow);
+  return { total: Number(total) || 0, page, pageSize, rows };
+}
+
+export function countSelfDraws(userId) {
+  return Number(database.prepare("SELECT COUNT(*) AS n FROM self_draws WHERE user_id = ? AND lottery_code = 'self3d'").get(userId).n) || 0;
+}
+
 function forecastPayload(payload) {
   if (!payload || typeof payload !== "object" || !Object.hasOwn(payload, "positionStats")) return payload;
   const rest = { ...payload };
@@ -793,7 +878,7 @@ export function adminDataSummary() {
   const count = (sql) => Number(database.prepare(sql).get().n);
   return {
     draws: count("SELECT COUNT(*) AS n FROM draws"),
-    drawsByLottery: Object.values(LOTTERIES).map((lottery) => ({
+    drawsByLottery: Object.values(LOTTERIES).filter((lottery) => lottery.source !== "local").map((lottery) => ({
       code: lottery.code,
       name: lottery.name,
       count: Number(database.prepare("SELECT COUNT(*) AS n FROM draws WHERE lottery_code = ?").get(lottery.code).n),
@@ -990,6 +1075,7 @@ export function deleteUser(id) {
   database.exec("BEGIN");
   try {
     database.prepare("DELETE FROM expert_picks WHERE user_id = ?").run(id);
+    database.prepare("DELETE FROM self_draws WHERE user_id = ?").run(id);
     database.prepare("DELETE FROM play_orders WHERE user_id = ?").run(id);
     database.prepare("DELETE FROM user_play_prizes WHERE user_id = ?").run(id);
     database.prepare("DELETE FROM sessions WHERE user_id = ?").run(id);
@@ -1061,6 +1147,11 @@ function localDateKey(value) {
 }
 
 function resolveResult(row) {
+  const lottery = getLottery(row.lottery_code);
+  if (lottery.source === "local") {
+    if (!row.target_issue) return null;
+    return selfDrawByIssue(row.user_id, row.lottery_code, row.target_issue);
+  }
   const draws = getDraws(row.lottery_code);
   const ahead = row.ahead || 1;
   const index = draws.findIndex((draw) => draw.issue === row.based_issue);
@@ -1081,8 +1172,9 @@ function presentPlayOrder(row, now = new Date()) {
   let status = "pending";
   if (cancelled) status = "cancelled";
   else if (result) status = hit ? "hit" : "miss";
+  const local = lottery.source === "local";
   const deadline = row.deadline_at ? new Date(row.deadline_at) : null;
-  const cancellable = status === "pending" && deadline && now.getTime() < deadline.getTime();
+  const cancellable = status === "pending" && (local || (deadline && now.getTime() < deadline.getTime()));
   return {
     id: Number(row.id),
     userId: row.user_id,
@@ -1130,6 +1222,7 @@ export function playPrizesFor(userId) {
     fc3d: unitPrize(userId, "fc3d"),
     pl3: unitPrize(userId, "pl3"),
     pl5: unitPrize(userId, "pl5"),
+    self3d: unitPrize(userId, "self3d"),
   };
 }
 
@@ -1231,7 +1324,7 @@ export function getPlayDeadline(lotteryCode) {
 }
 
 export function listPlayDeadlines() {
-  return Object.values(LOTTERIES).map((lottery) => ({
+  return Object.values(LOTTERIES).filter((lottery) => lottery.source !== "local").map((lottery) => ({
     code: lottery.code,
     name: lottery.name,
     time: getPlayDeadline(lottery.code),
@@ -1239,7 +1332,7 @@ export function listPlayDeadlines() {
 }
 
 export function savePlayDeadlines(times) {
-  const saved = Object.values(LOTTERIES).map((lottery) => {
+  const saved = Object.values(LOTTERIES).filter((lottery) => lottery.source !== "local").map((lottery) => {
     const time = normalizeDeadline(times?.[lottery.code]);
     metaSet(`play_deadline:${lottery.code}`, time);
     return { code: lottery.code, name: lottery.name, time };
@@ -1322,6 +1415,7 @@ export function setUserPlayPrizes(userIds, prizes = {}, reset = false) {
 
 export function createPlayOrders({ userId, lotteryCode, selection, lines, multiple, now = new Date() }) {
   const lottery = getLottery(lotteryCode);
+  if (lottery.source === "local") return createLocalPlayOrders({ userId, lottery, selection, lines, multiple, now });
   const chosen = normalizeMultiple(multiple);
   const rawLines = Array.isArray(lines) ? lines : (selection ? [selection] : []);
   if (!rawLines.length || rawLines.length > 50) {
@@ -1397,6 +1491,162 @@ export function createPlayOrder(args) {
   return createPlayOrders(args).orders[0];
 }
 
+function createLocalPlayOrders({ userId, lottery, selection, lines, multiple, now }) {
+  const chosen = normalizeMultiple(multiple);
+  const rawLines = Array.isArray(lines) ? lines : (selection ? [selection] : []);
+  if (!rawLines.length || rawLines.length > 50) {
+    const error = new Error("请先选号");
+    error.status = 400;
+    throw error;
+  }
+  const pending = pendingSelfOrders(userId, lottery.code);
+  const issue = pending[0]?.target_issue || nextSelfIssue(userId, lottery.code);
+  const basedIssue = String(Math.max(0, Number(issue) - 1));
+  const cleaned = rawLines.map((line) => {
+    const numbers = normalizeSelection(line, lottery.digits);
+    const bets = countBets(numbers);
+    return { numbers, bets, stake: lineStake(bets, chosen) };
+  });
+  const total = cleaned.reduce((sum, line) => sum + line.stake, 0);
+  const stamp = now.toISOString();
+  const insert = database.prepare(`
+    INSERT INTO play_orders (
+      user_id, lottery_code, based_issue, selection, bets, stake, multiple,
+      target_issue, ahead, target_date, deadline_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  let firstId = 0;
+  database.exec("BEGIN");
+  try {
+    const balance = readBalance(userId);
+    if (balance <= 0) {
+      const error = new Error("余额不足，暂时无法下单");
+      error.status = 400;
+      throw error;
+    }
+    if (balance < total) {
+      const error = new Error(`试玩余额不足，还差 ${total - balance} 元`);
+      error.status = 400;
+      throw error;
+    }
+    database.prepare("UPDATE users SET play_balance = play_balance - ? WHERE id = ?").run(total, userId);
+    cleaned.forEach((line) => {
+      const result = insert.run(
+        userId, lottery.code, basedIssue, JSON.stringify(line.numbers), line.bets, line.stake, chosen,
+        issue, 1, "", "", stamp,
+      );
+      if (!firstId) firstId = Number(result.lastInsertRowid);
+    });
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  const rows = database.prepare(`${orderSelect} WHERE o.id >= ? AND o.user_id = ? ORDER BY o.id`).all(firstId, userId);
+  return {
+    orders: rows.map((row) => presentPlayOrder(row, now)),
+    balance: readBalance(userId),
+  };
+}
+
+export function selfPlayBoard(userId, lotteryCode) {
+  const pending = pendingSelfOrders(userId, lotteryCode);
+  const recent = database.prepare(`
+    SELECT lottery_code, issue, draw_date, digits
+    FROM self_draws
+    WHERE user_id = ? AND lottery_code = ?
+    ORDER BY CAST(issue AS INTEGER) DESC
+    LIMIT 10
+  `).all(userId, lotteryCode).map(selfDrawRow);
+  const nextIssue = pending[0]?.target_issue || nextSelfIssue(userId, lotteryCode);
+  return {
+    latest: recent[0] || null,
+    recent,
+    pendingCount: pending.length,
+    nextIssue,
+  };
+}
+
+export function drawSelfPlay({ userId, lotteryCode = "self3d", now = new Date(), digits } = {}) {
+  const lottery = getLottery(lotteryCode);
+  if (lottery.source !== "local") {
+    const error = new Error("这个彩种不能自开");
+    error.status = 400;
+    throw error;
+  }
+  const pending = pendingSelfOrders(userId, lottery.code);
+  if (!pending.length) {
+    const error = new Error("还没有未开奖的注");
+    error.status = 400;
+    throw error;
+  }
+  const issue = pending[0].target_issue || nextSelfIssue(userId, lottery.code);
+  const drawn = (Array.isArray(digits) ? digits : [randomInt(10), randomInt(10), randomInt(10)]).map(Number);
+  if (drawn.length !== lottery.digits || drawn.some((digit) => !Number.isInteger(digit) || digit < 0 || digit > 9)) {
+    const error = new Error("开奖号码不正确");
+    error.status = 400;
+    throw error;
+  }
+  const stamp = now.toISOString();
+  database.exec("BEGIN");
+  try {
+    database.prepare(`
+      INSERT INTO self_draws (user_id, lottery_code, issue, draw_date, digits, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(userId, lottery.code, issue, localDateKey(stamp), drawn.join(","), stamp);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  pending.forEach((row) => settleOrder({ ...row, target_issue: issue }));
+  const orders = database.prepare(`${orderSelect} WHERE o.user_id = ? AND o.lottery_code = ? AND o.target_issue = ? ORDER BY o.id`).all(userId, lottery.code, issue);
+  return {
+    draw: selfDrawByIssue(userId, lottery.code, issue),
+    orders: orders.map((row) => presentPlayOrder(row, now)),
+    balance: readBalance(userId),
+  };
+}
+
+export function deleteSelfPlayData(userIds) {
+  const ids = [...new Set((userIds || []).map((id) => Number(id)))].filter((id) => Number.isInteger(id) && id > 0);
+  if (!ids.length) {
+    const error = new Error("请选择用户");
+    error.status = 400;
+    throw error;
+  }
+  const missing = ids.filter((id) => !getAccount(id));
+  if (missing.length) {
+    const error = new Error("有用户不存在");
+    error.status = 404;
+    throw error;
+  }
+  const placeholders = ids.map(() => "?").join(",");
+  database.exec("BEGIN");
+  try {
+    const pending = database.prepare(`
+      SELECT id, user_id, stake FROM play_orders
+      WHERE lottery_code = 'self3d' AND cancelled_at IS NULL AND prize_credited = 0
+        AND user_id IN (${placeholders})
+    `).all(...ids);
+    for (const row of pending) {
+      database.prepare("UPDATE users SET play_balance = play_balance + ? WHERE id = ?").run(row.stake, row.user_id);
+    }
+    const removedOrders = database.prepare(`DELETE FROM play_orders WHERE lottery_code = 'self3d' AND user_id IN (${placeholders})`).run(...ids);
+    const removedDraws = database.prepare(`DELETE FROM self_draws WHERE lottery_code = 'self3d' AND user_id IN (${placeholders})`).run(...ids);
+    database.exec("COMMIT");
+    return {
+      users: ids.length,
+      orders: removedOrders.changes,
+      draws: removedDraws.changes,
+      refunded: pending.reduce((sum, row) => sum + row.stake, 0),
+    };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function listPlayOrders(account, now = new Date()) {
   settlePending();
   const sql = `
@@ -1440,8 +1690,9 @@ export function cancelPlayOrder({ id, account, now = new Date() }) {
     error.status = 400;
     throw error;
   }
+  const local = getLottery(row.lottery_code).source === "local";
   const deadline = row.deadline_at ? new Date(row.deadline_at) : null;
-  if (!deadline || now.getTime() >= deadline.getTime()) {
+  if (!local && (!deadline || now.getTime() >= deadline.getTime())) {
     const error = new Error("已过截止时间，不能撤销");
     error.status = 400;
     throw error;

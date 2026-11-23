@@ -59,3 +59,16 @@ export function reviewForecasts(draws, rows) {
     };
   });
 }
+
+// 核对表按开奖日期从近到远，不按存档写入时间。最近 N 期也按这个日期截取。
+export function checkedForecasts(draws, rows, limit = 30) {
+  const count = Math.min(5000, Math.max(1, Number(limit) || 30));
+  return reviewForecasts(draws, rows)
+    .filter((item) => item.status === "drawn")
+    .sort((left, right) => {
+      const byDate = String(right.resultDate || "").localeCompare(String(left.resultDate || ""));
+      if (byDate) return byDate;
+      return String(right.resultIssue || "").localeCompare(String(left.resultIssue || ""), "en", { numeric: true });
+    })
+    .slice(0, count);
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { forecastMatched, gradeForecast, markLatestForecast, reviewForecasts } from "./forecastCheck.js";
+import { checkedForecasts, forecastMatched, gradeForecast, markLatestForecast, reviewForecasts } from "./forecastCheck.js";
 
 const payload = {
   jointDirects: [{ name: "综合1", digits: [1, 2, 3] }, { name: "综合2", digits: [9, 8, 2] }],
@@ -58,4 +58,20 @@ test("the draw newer than the saved issue is the one that gets checked", () => {
   assert.equal(checked.resultIssue, "2026002");
   assert.deepEqual(checked.grade.hotDirects, ["热号"]);
   assert.equal(waiting.status, "pending");
+});
+
+test("the check list follows draw date from newest to oldest", () => {
+  const draws = [
+    { issue: "2026004", drawDate: "2026-01-04", digits: [1, 2, 3] },
+    { issue: "2026003", drawDate: "2026-01-03", digits: [1, 2, 3] },
+    { issue: "2026002", drawDate: "2026-01-02", digits: [9, 8, 2] },
+    { issue: "2026001", drawDate: "2026-01-01", digits: [1, 2, 3] },
+  ];
+  const rows = [
+    { basedIssue: "2026001", payload },
+    { basedIssue: "2026003", payload },
+    { basedIssue: "2026002", payload },
+  ];
+  const checked = checkedForecasts(draws, rows, 2);
+  assert.deepEqual(checked.map((item) => item.resultDate), ["2026-01-04", "2026-01-03"]);
 });

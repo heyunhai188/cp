@@ -179,6 +179,7 @@ p { margin: 0 0 8px; }
   border-radius: 14px;
 }
 .page-hero, .ticket-hero { padding: 16px; margin-bottom: 12px; }
+.predict-lottery .lede { margin-bottom: 10px; }
 .ticket-hero { display: block; }
 .panel { padding: 14px; margin-bottom: 12px; }
 .eyebrow { margin: 0 0 4px; color: var(--purple); font-size: 12px; }
@@ -349,7 +350,31 @@ th { color: var(--purple-deep); }
 .draw-line { display: flex; align-items: center; gap: 6px; margin: 12px 0; font-size: 14px; }
 .draw-tag { background: #ff7a45; color: white; border-radius: 4px; font-size: 12px; padding: 1px 4px; }
 .draw-line b { color: var(--purple); font-size: 18px; }
+.draw-line .text-btn { margin-left: auto; }
+.recent-draws { list-style: none; margin: 0 0 12px; padding: 8px 10px; display: grid; gap: 8px; border-radius: 12px; background: var(--bg); }
+.recent-draws li { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.recent-draws b { min-width: 1.1em; color: var(--purple); text-align: center; font-size: 15px; }
+.recent-draws small { margin-left: auto; color: var(--muted); }
 .random { border: 1px solid var(--brand-line); background: var(--card); border-radius: 999px; padding: 6px 14px; }
+.traits { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; }
+.traits button { height: 24px; padding: 0 8px; border: 1px solid var(--brand-line); border-radius: 999px; background: var(--card); color: var(--muted); font-size: 12px; line-height: 22px; }
+.traits button.on { background: var(--purple); color: white; border-color: var(--purple); }
+.play-toast { margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-deep); }
+.draw-show { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: 24px; background: rgba(16, 12, 28, .62); }
+.draw-card { width: min(340px, 100%); padding: 26px 18px 20px; border-radius: 20px; background: var(--card); text-align: center; }
+.draw-card.hit { box-shadow: 0 0 0 3px #e2b34d; }
+.draw-kicker { margin: 0; color: var(--muted); font-size: 13px; }
+.draw-title { margin: 6px 0 0; font-size: 32px; }
+.draw-card.hit .draw-title { color: #b8860b; }
+.draw-card.miss .draw-title { color: var(--muted); }
+.draw-balls { display: flex; justify-content: center; gap: 10px; margin: 18px 0 8px; }
+.draw-balls b { width: 62px; height: 62px; display: grid; place-items: center; border-radius: 50%; background: var(--purple); color: white; font-size: 28px; }
+.draw-card.spin .draw-balls b { animation: ball-bob .14s linear infinite; }
+.draw-card.hit .draw-balls b { animation: ball-pop .35s ease; }
+@keyframes ball-bob { 50% { transform: translateY(-7px); } }
+@keyframes ball-pop { 0% { transform: scale(.6); } 70% { transform: scale(1.08); } 100% { transform: scale(1); } }
+.draw-prize { margin: 0 0 14px; font-size: 16px; }
+.draw-card .btn { min-width: 140px; }
 .pad { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px 6px; margin: 8px 0 16px; }
 .num {
   width: 42px;

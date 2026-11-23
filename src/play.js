@@ -7,6 +7,7 @@ export const DIRECT_PRIZE = {
   fc3d: 1040,
   pl3: 1040,
   pl5: 100000,
+  self3d: 1040,
 };
 
 export function normalizeSelection(selection, digits) {

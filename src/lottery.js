@@ -34,10 +34,24 @@ export const LOTTERIES = {
     source: "sporttery",
     gameNo: "350133",
   },
+  self3d: {
+    code: "self3d",
+    name: "自开3D",
+    digits: 3,
+    positions: ["百位", "十位", "个位"],
+    short: ["百", "十", "个"],
+    sumMax: 27,
+    sumBigMin: 14,
+    source: "local",
+  },
 };
 
 export function listLotteries() {
   return Object.values(LOTTERIES);
+}
+
+export function listOfficialLotteries() {
+  return Object.values(LOTTERIES).filter((lottery) => lottery.source !== "local");
 }
 
 export function getLottery(code) {

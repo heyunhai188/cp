@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { request } from "../api.js";
 import { LOTTERIES } from "../lottery.js";
 import { session } from "../session.js";
@@ -16,6 +16,7 @@ import {
 
 const props = defineProps({
   embedded: { type: Boolean, default: false },
+  lotteryCode: { type: String, default: "" },
 });
 const METHOD_GROUPS = [
   { id: "compound", name: "复式", methods: [
@@ -33,8 +34,8 @@ const presets = [30, 50, 100, 200, 500];
 
 const canBacktestPl5 = computed(() => Boolean(session.user?.canManage));
 const lotteries = computed(() => (canBacktestPl5.value ? LOTTERIES : LOTTERIES.filter((item) => item.code !== "pl5")));
-const lottery = ref(localStorage.getItem("backtest.lottery") || "fc3d");
-if (lottery.value === "pl5" && !canBacktestPl5.value) lottery.value = "fc3d";
+const lottery = ref((props.embedded && props.lotteryCode) || localStorage.getItem("backtest.lottery") || "fc3d");
+if (!props.embedded && lottery.value === "pl5" && !canBacktestPl5.value) lottery.value = "fc3d";
 const n = ref(clampN(localStorage.getItem("backtest.n") || "100"));
 const k = ref(localStorage.getItem("backtest.k") || "");
 const methodId = ref(localStorage.getItem("backtest.method") || "joint-compound");
@@ -130,8 +131,9 @@ function persist() {
 
 async function load() {
   if (lottery.value === "pl5" && !canBacktestPl5.value) {
-    lottery.value = "fc3d";
+    if (!props.embedded) lottery.value = "fc3d";
     error.value = "排列五回测只对超级管理员开放";
+    note.value = "";
     return;
   }
   const id = ++requestId;
@@ -162,8 +164,13 @@ async function load() {
 }
 
 function switchLottery(code) {
-  if (code === "pl5" && !canBacktestPl5.value) return;
-  if (code === lottery.value) return;
+  if (!code || code === lottery.value) return;
+  if (code === "pl5" && !canBacktestPl5.value) {
+    lottery.value = code;
+    error.value = "排列五回测只对超级管理员开放";
+    note.value = "";
+    return;
+  }
   lottery.value = code;
   localStorage.setItem("backtest.lottery", code);
   prize.value = localStorage.getItem(`backtest.prize.${code}`) || "";
@@ -198,6 +205,11 @@ function setN(value) {
   load();
 }
 
+watch(() => props.lotteryCode, (code) => {
+  if (!props.embedded || !code) return;
+  switchLottery(code);
+});
+
 onMounted(load);
 </script>
 
@@ -209,7 +221,7 @@ onMounted(load);
     <p class="lede">对比历史命中、随机理论次数和最长未中。回测结果不代表未来中奖概率。</p>
   </header>
   <section class="panel predict-controls">
-    <div class="lottery-switch">
+    <div v-if="!props.embedded" class="lottery-switch">
       <button v-for="item in lotteries" :key="item.code" type="button" class="btn ghost small" :class="{ on: item.code === lottery }" @click="switchLottery(item.code)">{{ item.name }}</button>
     </div>
     <p v-if="!canBacktestPl5" class="quiet">排列五要逐期算完全部号码，回测只对超级管理员开放。</p>

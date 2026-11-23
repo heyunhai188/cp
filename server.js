@@ -7,6 +7,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   countDrawsByLottery,
+  countSelfDraws,
   adminDataSummary,
   clearAdminData,
   createRule,
@@ -21,6 +22,8 @@ import {
   dismissPlayOrder,
   deleteSession,
   deleteUser,
+  deleteSelfPlayData,
+  drawSelfPlay,
   findUserByUsername,
   getDraws,
   getForecast,
@@ -46,10 +49,12 @@ import {
   markScheduledSyncLottery,
   markScheduledSyncSlot,
   queryDraws,
+  querySelfDraws,
   resetUserPassword,
   saveExpertPick,
   saveForecast,
   savePlayDeadlines,
+  selfPlayBoard,
   SESSION_TTL_SECONDS,
   setPlayBalance,
   setUserPlayPrizes,
@@ -59,13 +64,14 @@ import {
   updateRolePlay,
 } from "./src/db.js";
 import { expertBoard, expertWindowSize, normalizeExpertPick } from "./src/expert.js";
-import { markLatestForecast, reviewForecasts } from "./src/forecastCheck.js";
-import { getLottery, listLotteries } from "./src/lottery.js";
+import { checkedForecasts, markLatestForecast } from "./src/forecastCheck.js";
+import { getLottery, listOfficialLotteries } from "./src/lottery.js";
 import { hashPassword, randomPassword, verifyPassword } from "./src/password.js";
 import { upcomingWindow } from "./src/play.js";
 import { compileRule, describeDefinition, prepareRule } from "./src/rules.js";
 import { backtestLottery, BACKTEST_METHODS } from "./src/backtest.js";
 import { archivePayload, predict } from "./src/predict.js";
+import { ensureAdvanceForecasts } from "./src/forecastArchive.js";
 import { presentDraw, summarize } from "./src/stats.js";
 import { officialDrawIsToday } from "./src/sync.js";
 import { syncDraws } from "./src/syncDraws.js";
@@ -97,6 +103,7 @@ const beijingClock = new Intl.DateTimeFormat("en-CA", {
   hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
 });
 initDatabase();
+for (const lottery of listOfficialLotteries()) rememberAdvanceForecast(lottery.code);
 const createdAdmin = takeInitialAdmin();
 if (createdAdmin) {
   const credentialFile = path.join(root, "data", "admin-initial.txt");
@@ -284,12 +291,16 @@ function overview(url, response) {
   const n = clampN(url.searchParams.get("n"));
   const code = lotteryCodeFrom(url.searchParams.get("lottery"));
   const lottery = getLottery(code);
+  if (lottery.source === "local") {
+    send(response, 400, { error: "这个彩种没有官网开奖" });
+    return;
+  }
   const draws = getDraws(code);
   const rules = listRules(code);
   const started = performance.now();
   const stats = summarize(draws, rules, n, lottery);
   send(response, 200, {
-    lotteries: listLotteries().map(publicLottery),
+    lotteries: listOfficialLotteries().map(publicLottery),
     lottery: publicLottery(lottery),
     drawCount: draws.length,
     remoteTotal: getRemoteTotal(code),
@@ -316,6 +327,7 @@ async function sync(request, response) {
   try {
     const written = await syncDraws(code, mode);
     queuePlaySettlement([code]);
+    rememberAdvanceForecast(code);
     send(response, 200, written);
   } finally {
     syncing = false;
@@ -331,9 +343,10 @@ async function syncPlayDraws() {
   syncing = true;
   try {
     const results = [];
-    for (const lottery of listLotteries()) {
+    for (const lottery of listOfficialLotteries()) {
       try {
         const written = await syncDraws(lottery.code, "auto");
+        rememberAdvanceForecast(lottery.code);
         results.push({ code: lottery.code, name: lottery.name, ok: true, message: written.message });
       } catch (error) {
         results.push({ code: lottery.code, name: lottery.name, ok: false, message: error.message || "同步失败" });
@@ -350,7 +363,7 @@ function scheduledSyncStatus() {
   const time = beijingDateTime();
   const date = `${time.year}-${time.month}-${time.day}`;
   const minuteOfDay = Number(time.hour) * 60 + Number(time.minute);
-  const lotteries = listLotteries();
+  const lotteries = listOfficialLotteries();
   const state = getScheduledSyncState(date, lotteries.map((lottery) => lottery.code));
   return {
     date,
@@ -388,7 +401,7 @@ async function runScheduledAutoSync() {
   if (minuteOfDay < firstSlot || minuteOfDay > lastSlot || (minuteOfDay - firstSlot) % 5 !== 0) return;
 
   const slot = `${date} ${time.hour}:${time.minute}`;
-  const lotteries = listLotteries();
+  const lotteries = listOfficialLotteries();
   const state = getScheduledSyncState(date, lotteries.map((lottery) => lottery.code));
   if (state.lastSlot === slot || syncing) return;
   // 先落盘本轮时间槽。已完成时也要记下，避免同一分钟里每 15 秒再结算一次。
@@ -404,6 +417,7 @@ async function runScheduledAutoSync() {
       if (state.byLottery[lottery.code]?.complete === true) continue;
       try {
         const result = await syncDraws(lottery.code, "auto");
+        rememberAdvanceForecast(lottery.code);
         const complete = officialDrawIsToday(result.latestDate, date);
         if (complete) landedToday = true;
         const message = complete
@@ -496,6 +510,15 @@ function hits(url, id, response) {
   });
 }
 
+function rememberAdvanceForecast(lotteryCode) {
+  try {
+    const inserted = ensureAdvanceForecasts(lotteryCode);
+    if (inserted.length) console.log(`[自动预测] ${getLottery(lotteryCode).name} 已保存 ${inserted.join("、")}`);
+  } catch (error) {
+    console.error(`[自动预测] ${lotteryCode} 失败: ${error.message || error}`);
+  }
+}
+
 function forecastRecord(code, draws, result, replace) {
   if (!draws[0]) return null;
   const saved = saveForecast({
@@ -524,6 +547,10 @@ function backtest(url, response, account) {
     return;
   }
   const lottery = getLottery(code);
+  if (lottery.source === "local") {
+    send(response, 400, { error: "这个彩种没有回测" });
+    return;
+  }
   const draws = getDraws(code);
   const nValue = url.searchParams.get("n");
   const n = nValue === null || nValue === "" ? 100 : clampN(nValue);
@@ -547,6 +574,10 @@ function backtest(url, response, account) {
 function forecast(url, response, user) {
   const code = lotteryCodeFrom(url.searchParams.get("lottery"));
   const lottery = getLottery(code);
+  if (lottery.source === "local") {
+    send(response, 400, { error: "这个彩种没有预测" });
+    return;
+  }
   const draws = getDraws(code);
   const result = predict(draws, lottery, clampN(url.searchParams.get("n")), url.searchParams.get("k"));
   const archive = user.canOperate
@@ -561,7 +592,7 @@ function forecast(url, response, user) {
     drawCount: draws.length,
     latest: draws[0] ? presentDraw(draws[0]) : null,
     archive,
-    checks: reviewForecasts(draws, listForecasts(code, clampN(url.searchParams.get("checksN") || 30))),
+    checks: checkedForecasts(draws, listForecasts(code, 5000), clampN(url.searchParams.get("checksN") || 30)),
     experts: {
       ...expertBoard(draws, picks, expertWindowSize(url.searchParams.get("expertN"))),
       mine,
@@ -589,6 +620,10 @@ async function replaceForecast(request, response) {
   const body = await readJson(request);
   const code = lotteryCodeFrom(body.lottery);
   const lottery = getLottery(code);
+  if (lottery.source === "local") {
+    send(response, 400, { error: "这个彩种没有预测" });
+    return;
+  }
   const draws = getDraws(code);
   if (!draws[0]) {
     send(response, 400, { error: "还没有开奖，不能保存预测" });
@@ -597,24 +632,34 @@ async function replaceForecast(request, response) {
   const result = predict(draws, lottery, clampN(body.n), body.k);
   send(response, 200, {
     archive: forecastRecord(code, draws, result, true),
-    checks: reviewForecasts(draws, listForecasts(code, clampN(body.checksN || 30))),
+    checks: checkedForecasts(draws, listForecasts(code, 5000), clampN(body.checksN || 30)),
   });
 }
 
-function draws(url, response) {
+function draws(url, response, account) {
   const page = Math.min(500, Math.max(1, Number(url.searchParams.get("page")) || 1));
   const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize")) || 40));
   const requested = url.searchParams.get("lottery") || "";
   const lotteryCode = requested ? lotteryCodeFrom(requested, "") : "";
-  const result = queryDraws({
-    lotteryCode,
-    issue: (url.searchParams.get("issue") || "").replace(/\D/g, "").slice(0, 12),
-    dateFrom: dateOrEmpty(url.searchParams.get("dateFrom")),
-    dateTo: dateOrEmpty(url.searchParams.get("dateTo")),
-    number: url.searchParams.get("number") || "",
-    page,
-    pageSize,
-  });
+  const result = lotteryCode === "self3d"
+    ? querySelfDraws({
+      userId: account.id,
+      issue: (url.searchParams.get("issue") || "").replace(/\D/g, "").slice(0, 12),
+      dateFrom: dateOrEmpty(url.searchParams.get("dateFrom")),
+      dateTo: dateOrEmpty(url.searchParams.get("dateTo")),
+      number: url.searchParams.get("number") || "",
+      page,
+      pageSize,
+    })
+    : queryDraws({
+      lotteryCode,
+      issue: (url.searchParams.get("issue") || "").replace(/\D/g, "").slice(0, 12),
+      dateFrom: dateOrEmpty(url.searchParams.get("dateFrom")),
+      dateTo: dateOrEmpty(url.searchParams.get("dateTo")),
+      number: url.searchParams.get("number") || "",
+      page,
+      pageSize,
+    });
   const counts = countDrawsByLottery();
   send(response, 200, {
     total: result.total,
@@ -626,11 +671,14 @@ function draws(url, response) {
       sales: row.sales,
       ...presentDraw(row),
     })),
-    counts: listLotteries().map((lottery) => ({
-      code: lottery.code,
-      name: lottery.name,
-      count: counts.get(lottery.code) || 0,
-    })),
+    counts: [
+      ...listOfficialLotteries().map((lottery) => ({
+        code: lottery.code,
+        name: lottery.name,
+        count: counts.get(lottery.code) || 0,
+      })),
+      { code: "self3d", name: "自开3D", count: countSelfDraws(account.id) },
+    ],
   });
 }
 
@@ -958,6 +1006,10 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "PUT" && url.pathname === "/api/expert-picks") {
       const body = await readJson(request);
       const lottery = getLottery(lotteryCodeFrom(body.lottery));
+      if (lottery.source === "local") {
+        send(response, 400, { error: "这个彩种没有专家推荐" });
+        return;
+      }
       const draws = getDraws(lottery.code);
       if (!draws[0]) {
         send(response, 400, { error: "还没有开奖，不能推荐" });
@@ -973,7 +1025,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/draws") {
-      draws(url, response);
+      draws(url, response, account);
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/admin/play") {
@@ -995,18 +1047,34 @@ const server = http.createServer(async (request, response) => {
       send(response, 200, { users: setUserPlayPrizes(body.userIds, body.prizes, body.reset === true) });
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/admin/play/self3d") {
+      const body = await readJson(request);
+      send(response, 200, deleteSelfPlayData(body.userIds));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/play/sync") {
       send(response, 200, await syncPlayDraws());
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/play/draw") {
+      const body = await readJson(request);
+      send(response, 200, drawSelfPlay({ userId: account.id, lotteryCode: body.lottery || "self3d" }));
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/play") {
       const code = lotteryCodeFrom(url.searchParams.get("lottery") || "pl3");
       const lottery = getLottery(code);
-      const latest = getDraws(code)[0] || null;
+      const local = lottery.source === "local" ? selfPlayBoard(account.id, code) : null;
+      const recent = local ? local.recent : getDraws(code).slice(0, 10);
+      const latest = recent[0] || null;
       send(response, 200, {
         lottery: publicLottery(lottery),
+        local: Boolean(local),
         latest: latest ? presentDraw(latest) : null,
-        upcoming: latest ? upcomingWindow(latest, getPlayDeadline(code)) : null,
+        recent: recent.map(presentDraw),
+        upcoming: local ? null : (latest ? upcomingWindow(latest, getPlayDeadline(code)) : null),
+        pendingCount: local?.pendingCount || 0,
+        nextIssue: local?.nextIssue || "",
         balance: playBalance(account.id),
         prizes: playPrizesFor(account.id),
       });

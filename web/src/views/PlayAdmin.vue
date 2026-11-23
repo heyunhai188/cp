@@ -29,7 +29,7 @@ const users = ref([]);
 const orders = ref([]);
 const drafts = ref({});
 const selectedIds = ref([]);
-const prizeDraft = ref({ fc3d: "1040", pl3: "1040", pl5: "100000" });
+const prizeDraft = ref({ fc3d: "1040", pl3: "1040", pl5: "100000", self3d: "1040" });
 const prizeSaving = ref(false);
 const error = ref("");
 const saving = ref(false);
@@ -87,7 +87,7 @@ function toggleFiltered() {
 
 function prizeText(user) {
   const prizes = user.prizes || {};
-  return `福彩3D ${prizes.fc3d ?? 1040} · 排列三 ${prizes.pl3 ?? 1040} · 排列五 ${prizes.pl5 ?? 100000}`;
+  return `福彩3D ${prizes.fc3d ?? 1040} · 排列三 ${prizes.pl3 ?? 1040} · 排列五 ${prizes.pl5 ?? 100000} · 自开3D ${prizes.self3d ?? 1040}`;
 }
 
 async function savePrizes(reset) {
@@ -100,6 +100,7 @@ async function savePrizes(reset) {
     fc3d: Number(prizeDraft.value.fc3d),
     pl3: Number(prizeDraft.value.pl3),
     pl5: Number(prizeDraft.value.pl5),
+    self3d: Number(prizeDraft.value.self3d),
   };
   if (!reset && Object.values(prizes).some((prize) => !Number.isInteger(prize) || prize < 0 || prize > 100000000)) {
     error.value = "单注奖金必须是 0 到 1 亿之间的整数";
@@ -109,7 +110,7 @@ async function savePrizes(reset) {
   const names = users.value.filter((user) => selectedIds.value.includes(user.id)).map((user) => user.username).join("、");
   const question = reset
     ? `把 ${names} 的单注奖金恢复为默认（福彩3D 1040、排列三 1040、排列五 100000）？`
-    : `把 ${names} 的单注奖金设为福彩3D ${prizes.fc3d}、排列三 ${prizes.pl3}、排列五 ${prizes.pl5}？`;
+    : `把 ${names} 的单注奖金设为福彩3D ${prizes.fc3d}、排列三 ${prizes.pl3}、排列五 ${prizes.pl5}、自开3D ${prizes.self3d}？`;
   if (!window.confirm(`${question}已经开奖的订单仍按当时结算的金额，不会重算。`)) return;
   prizeSaving.value = true;
   error.value = "";
@@ -217,6 +218,29 @@ async function resetBalance(user) {
   }
 }
 
+async function deleteSelf() {
+  error.value = "";
+  notice.value = "";
+  const picked = users.value.filter((user) => selectedIds.value.includes(user.id));
+  if (!picked.length) {
+    error.value = "请先勾选用户";
+    return;
+  }
+  const names = picked.map((user) => user.username).join("、");
+  if (!window.confirm(`删除 ${names} 的自开3D订单和开奖记录？未开奖的注会退回占用金额，已经派过的奖金留在余额里。其他彩种不动。`)) return;
+  try {
+    const result = await request("/api/admin/play/self3d", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userIds: picked.map((user) => user.id) }),
+    });
+    await load();
+    notice.value = `已删除 ${result.users} 人的自开3D：订单 ${result.orders} 笔，开奖 ${result.draws} 期，退回 ${result.refunded} 元。`;
+  } catch (err) {
+    error.value = err.message || "删除失败";
+  }
+}
+
 onMounted(async () => {
   try {
     await load();
@@ -254,11 +278,12 @@ onMounted(async () => {
 
   <section v-if="pane === 'prize'" id="prize-management" class="panel play-admin-section">
     <div class="play-admin-section-head"><div><p class="eyebrow">结算金额</p><h2>单注奖金</h2></div><span class="admin-count">已选 {{ selectedIds.length }} 人</span></div>
-    <p class="quiet">每个彩种可以按人单独设置。不设置时福彩3D、排列三默认 1040 元，排列五默认 100000 元。勾选多人后一次保存，会把下面三个金额同时应用到这些人。已经开奖的订单不重算。</p>
+    <p class="quiet">每个彩种可以按人单独设置。不设置时福彩3D、排列三、自开3D默认 1040 元，排列五默认 100000 元。勾选多人后一次保存，会把下面的金额同时应用到这些人。已经开奖的订单不重算。</p>
     <form class="prize-form" @submit.prevent="savePrizes(false)">
       <label>福彩3D<input v-model="prizeDraft.fc3d" inputmode="numeric" aria-label="福彩3D单注奖金" /></label>
       <label>排列三<input v-model="prizeDraft.pl3" inputmode="numeric" aria-label="排列三单注奖金" /></label>
       <label>排列五<input v-model="prizeDraft.pl5" inputmode="numeric" aria-label="排列五单注奖金" /></label>
+      <label>自开3D<input v-model="prizeDraft.self3d" inputmode="numeric" aria-label="自开3D单注奖金" /></label>
       <div class="prize-actions">
         <button class="btn gold" type="submit" :disabled="prizeSaving">应用到选中用户</button>
         <button class="btn ghost" type="button" :disabled="prizeSaving" @click="savePrizes(true)">选中的人恢复默认</button>
@@ -269,6 +294,7 @@ onMounted(async () => {
   <section v-if="pane === 'wallet'" id="wallet-management" class="panel play-admin-section">
     <div class="play-admin-section-head"><div><p class="eyebrow">额度管理</p><h2>用户模拟余额</h2></div><span class="admin-count">{{ users.length }} 人 · {{ totalBalance }} 元</span></div>
     <p class="quiet">调整余额不会取消未开奖订单，也不会覆盖历史订单。金额只用于模拟试玩。</p>
+    <button class="btn ghost small" type="button" @click="deleteSelf">删除所选用户的自开3D</button>
     <label class="play-admin-search">搜索试玩用户<input v-model="walletSearch" type="search" placeholder="输入账号" /></label>
     <button class="btn ghost small" type="button" @click="toggleFiltered">{{ allFilteredSelected ? "取消全选" : "全选当前列表" }}</button>
     <div class="wallet-list">
@@ -286,7 +312,7 @@ onMounted(async () => {
     <div class="play-admin-section-head"><div><p class="eyebrow">订单核对</p><h2>模拟下注明细</h2></div><span class="admin-count">显示 {{ filteredOrders.length }} / {{ orders.length }}</span></div>
     <div class="play-admin-filters">
       <input v-model="orderSearch" type="search" placeholder="按用户名搜索" aria-label="按用户名搜索订单">
-      <select v-model="orderLottery" aria-label="按彩种筛选"><option value="">全部彩种</option><option value="fc3d">福彩3D</option><option value="pl3">排列三</option><option value="pl5">排列五</option></select>
+      <select v-model="orderLottery" aria-label="按彩种筛选"><option value="">全部彩种</option><option value="fc3d">福彩3D</option><option value="pl3">排列三</option><option value="pl5">排列五</option><option value="self3d">自开3D</option></select>
     </div>
     <div class="order-status-tabs" role="group" aria-label="按订单状态筛选">
       <button v-for="option in [{ label: '全部', value: '' }, { label: '待开奖', value: 'pending' }, { label: '已中奖', value: 'hit' }, { label: '未中奖', value: 'miss' }, { label: '已撤销', value: 'cancelled' }]" :key="option.value || 'all'" type="button" :class="{ selected: orderStatus === option.value }" @click="orderStatus = option.value">{{ option.label }}</button>

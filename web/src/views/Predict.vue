@@ -67,6 +67,9 @@ async function load() {
   }
 }
 
+const lotteryName = computed(() => LOTTERIES.find((item) => item.code === lottery.value)?.name || "");
+const lotteryReady = computed(() => data.value?.lottery?.code === lottery.value);
+
 function switchLottery(code) {
   if (code === lottery.value) return;
   remember();
@@ -74,6 +77,9 @@ function switchLottery(code) {
   n.value = predictRange(code);
   rangeText.value = String(n.value);
   k.value = localStorage.getItem(`predict.k.${code}`) || "";
+  checksN.value = Number(localStorage.getItem(`predict.checksN.${code}`)) || 30;
+  expandedCheck.value = "";
+  note.value = "";
   localStorage.setItem("lottery.code", code);
   load();
 }
@@ -185,22 +191,26 @@ function setSection(id) {
 </script>
 
 <template>
-  <p v-if="error && section !== 'backtest'" class="banner">{{ error }}</p>
-  <SectionTabs :tabs="SECTIONS" :model-value="section" @update:model-value="setSection" />
-  <template v-if="section === 'picks'">
-  <header class="page-hero">
-    <p class="lede">近 {{ n }} 期加权排序 · 每位 {{ k || "默认" }} 个。历史排序仅供参考，不代表提高中奖概率。</p>
-    <div class="lottery-switch">
+  <header class="page-hero predict-lottery">
+    <p class="lede">先选彩种。本期号码、专家推荐、存档核对、向前回测都会换成这个彩种。</p>
+    <div class="lottery-switch" role="group" aria-label="彩种">
       <button
         v-for="item in LOTTERIES"
         :key="item.code"
         type="button"
         class="btn ghost small"
         :class="{ on: item.code === lottery }"
+        :aria-pressed="item.code === lottery"
         @click="switchLottery(item.code)"
       >{{ item.name }}</button>
     </div>
   </header>
+  <p v-if="error && section !== 'backtest'" class="banner">{{ error }}</p>
+  <SectionTabs :tabs="SECTIONS" :model-value="section" @update:model-value="setSection" />
+  <template v-if="section === 'picks'">
+  <p v-if="!lotteryReady" class="quiet">正在读取{{ lotteryName }}…</p>
+  <template v-else>
+  <p class="quiet">近 {{ n }} 期加权排序 · 每位 {{ k || "默认" }} 个。历史排序仅供参考，不代表提高中奖概率。</p>
   <section class="panel predict-controls">
     <details class="fold predict-options"><summary>设置 · 近 {{ n }} 期 · 每位 {{ k || "默认" }} 个</summary>
     <div class="range-row"><span>近</span><input v-model="rangeText" inputmode="numeric" aria-label="统计期数" @change="commitRange" /><span>期</span></div>
@@ -272,7 +282,9 @@ function setSection(id) {
     </details>
   </template>
   </template>
+  </template>
 
+  <p v-else-if="section === 'experts' && !lotteryReady" class="quiet">正在读取{{ lotteryName }}…</p>
   <ExpertBoard
     v-else-if="section === 'experts'"
     :lottery="data?.lottery"
@@ -284,10 +296,11 @@ function setSection(id) {
     @save="saveExpert"
   />
 
+  <p v-else-if="section === 'archive' && !lotteryReady" class="quiet">正在读取{{ lotteryName }}…</p>
   <template v-else-if="section === 'archive'">
     <section v-if="currentArchive" class="panel archive-card">
       <h2>本期存档 · {{ currentArchive.archive.basedIssue }} 期后</h2>
-      <p>依据 {{ currentArchive.archive.basedIssue }} 预测下一期。近 {{ currentArchive.archive.n }} 期，每位 {{ currentArchive.archive.k }} 个号。保存于 {{ formatStamp(currentArchive.archive.createdAt) }}。开出下一期并同步后，这份就不能再改。</p>
+      <p>依据 {{ currentArchive.archive.basedIssue }} 预测下一期。近 {{ currentArchive.archive.n }} 期，每位 {{ currentArchive.archive.k }} 个号。保存于 {{ formatStamp(currentArchive.archive.createdAt) }}。每天同步到当日开奖后会自动保存下一期预测。开出下一期并同步后，这份就不能再改。</p>
       <p class="compound">综合直选 {{ (currentArchive.saved.jointDirects || []).map((item) => item.digits.join("")).join("、") }}</p>
       <p class="compound">{{ compoundLine(currentArchive.saved.jointCompound) }}</p>
       <p class="quiet">热号直选 {{ (currentArchive.saved.hotDirects || []).map((item) => `${item.name} ${item.digits.join("")}`).join("、") }}</p>
@@ -343,5 +356,5 @@ function setSection(id) {
     </section>
   </template>
 
-  <Backtest v-else-if="section === 'backtest'" embedded />
+  <Backtest v-else-if="section === 'backtest'" embedded :lottery-code="lottery" />
 </template>
