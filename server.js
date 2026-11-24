@@ -34,6 +34,7 @@ import {
   getScheduledSyncState,
   initDatabase,
   lastSync,
+  retainNewestDraws,
   trimOldestDraws,
   listForecasts,
   listPlayOrders,
@@ -103,7 +104,11 @@ const beijingClock = new Intl.DateTimeFormat("en-CA", {
   hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
 });
 initDatabase();
-for (const lottery of listOfficialLotteries()) rememberAdvanceForecast(lottery.code);
+for (const lottery of listOfficialLotteries()) {
+  const kept = retainNewestDraws(lottery.code, 500);
+  if (kept.removed) console.log(`[开奖保留] ${lottery.name} 删除最旧 ${kept.removed} 期，保留最新 ${kept.remaining} 期`);
+  rememberAdvanceForecast(lottery.code);
+}
 const createdAdmin = takeInitialAdmin();
 if (createdAdmin) {
   const credentialFile = path.join(root, "data", "admin-initial.txt");

@@ -324,6 +324,28 @@ export function upsertDraws(lotteryCode, rows) {
   return { inserted, updated };
 }
 
+// 每个官方彩种只留最新 keep 期。多出来的从最旧的开奖删起。
+export function retainNewestDraws(lotteryCode, keep = 500) {
+  const limit = Math.max(1, Math.floor(Number(keep) || 500));
+  const total = Number(database.prepare("SELECT COUNT(*) AS n FROM draws WHERE lottery_code = ?").get(lotteryCode).n);
+  const extra = total - limit;
+  if (extra <= 0) return { lotteryCode, removed: 0, remaining: total };
+  const removed = database.prepare(`
+    DELETE FROM draws WHERE rowid IN (
+      SELECT rowid FROM draws
+      WHERE lottery_code = ?
+      ORDER BY draw_date ASC, issue ASC
+      LIMIT ?
+    )
+  `).run(lotteryCode, extra).changes;
+  invalidateDraws(lotteryCode);
+  return {
+    lotteryCode,
+    removed: Number(removed) || 0,
+    remaining: total - (Number(removed) || 0),
+  };
+}
+
 function mapRule(row) {
   return {
     id: Number(row.id),

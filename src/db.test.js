@@ -22,6 +22,7 @@ const {
   saveForecast,
   setUserRecommend,
   trimOldestDraws,
+  retainNewestDraws,
   upsertDraws,
 } = await import("./db.js");
 
@@ -85,6 +86,18 @@ test("trimming removes only the oldest draws of one lottery", () => {
   assert.equal(trimmed.remaining, 2);
   assert.deepEqual(getDraws("fc3d").map((draw) => draw.issue), ["2026003", "2026002"]);
   assert.equal(getDraws("pl3")[0].issue, "26001");
+});
+
+test("keeping the newest draws drops the oldest and leaves another lottery alone", () => {
+  upsertDraws("fc3d", [
+    { issue: "2026004", drawDate: "2026-01-04", digits: [1, 1, 1], week: "日" },
+  ]);
+  const kept = retainNewestDraws("fc3d", 2);
+  assert.equal(kept.removed, 1);
+  assert.equal(kept.remaining, 2);
+  assert.deepEqual(getDraws("fc3d").map((draw) => draw.issue), ["2026004", "2026003"]);
+  assert.equal(getDraws("pl3")[0].issue, "26001");
+  assert.equal(retainNewestDraws("fc3d", 2).removed, 0);
 });
 
 test("expert permission defaults off and a pick can be replaced for the same issue", () => {

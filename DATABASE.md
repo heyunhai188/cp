@@ -15,7 +15,20 @@
 | `extra_json` | 扩展 JSON，包含星期、销售额、来源等 |
 | `updated_at` | 本地写入或更新的时间 |
 
-主键为 `(lottery_code, issue)`；索引 `idx_draws_recent` 支持按彩种和日期读取最近开奖。
+主键为 `(lottery_code, issue)`；索引 `idx_draws_recent` 支持按彩种和日期读取最近开奖。`fc3d`、`pl3`、`pl5` 各只保留最新 500 期。`retainNewestDraws` 按 `draw_date`、`issue` 从旧到新删除超出的行，在每次官网同步成功后和服务启动时执行。自开3D不写这张表。
+
+### `self_draws`：账号自己的自开3D
+
+| 字段 | 含义 |
+| --- | --- |
+| `user_id` | 开奖所属账号 |
+| `lottery_code` | 固定为 `self3d` |
+| `issue` | 该账号自己的期号 |
+| `draw_date` | 开奖日期 |
+| `digits` | 开奖号码，逗号分隔 |
+| `created_at` | 写入时间 |
+
+主键为 `(user_id, lottery_code, issue)`。只在该账号于试玩页点击开奖时写入，不参与官网同步、500 期保留和预测存档。删除用户，或超级管理员清理所选用户的自开3D时，一并删除。
 
 ### `rules`：首页统计规则
 
@@ -23,7 +36,11 @@
 
 ### `forecasts`：逐期预测存档
 
-字段：`id`（主键）、`lottery_code`、`based_issue`、`n`（预测窗口期数）、`k`（每位选号数）、`payload`（直选、复式和位置统计 JSON）、`created_at`。`(lottery_code, based_issue)` 唯一，保证一个彩种的一期只有一份预测存档。开奖核对由此表中的预测与 `draws` 的后续一期开奖计算。
+字段：`id`（主键）、`lottery_code`、`based_issue`、`n`（预测窗口期数）、`k`（每位选号数）、`payload`、`created_at`。`payload` 保存综合直选、综合复式、冷热直选、热号复式和冷号复式。`(lottery_code, based_issue)` 唯一，保证一个彩种的一期只有一份预测存档。开奖核对由此表中的预测与 `draws` 的后续一期开奖计算，核对列表按开奖日期从近到远。服务启动和官网同步成功后，会为最近 15 期中缺少存档的期号补一份，且不覆盖已有行。自开3D不写这张表。
+
+### `expert_picks`：专家推荐
+
+字段：`id`（主键）、`user_id`、`lottery_code`、`based_issue`、`directs`、`compound`、`created_at`、`updated_at`。`(user_id, lottery_code, based_issue)` 唯一。只有 `users.can_recommend = 1` 的账号可以保存。删除用户时一并删除。
 
 ### `sync_log`：官网同步日志
 
@@ -48,7 +65,7 @@
 
 ### `users`：用户账号与试玩余额
 
-字段：`id`（主键）、`username`（唯一账号）、`password_hash`、`role_id`、`play_balance`（模拟余额）、`must_change_password`（是否必须修改临时密码，0/1）、`created_at`。`role_id` 逻辑关联 `roles.id`。创建用户或管理员重置密码后会置为 1；首次登录修改密码成功后置为 0。升级旧库时会自动添加此字段，旧账号默认不受影响。
+字段：`id`（主键）、`username`（唯一账号）、`password_hash`、`role_id`、`play_balance`（模拟余额）、`must_change_password`（是否必须修改临时密码，0/1）、`can_recommend`（是否可写专家推荐，0/1，默认 0）、`created_at`。`role_id` 逻辑关联 `roles.id`。创建用户或管理员重置密码后会把 `must_change_password` 置为 1；首次登录修改密码成功后置为 0。升级旧库时会自动添加这些字段，旧账号默认不受影响。
 
 ### `sessions`：登录会话
 
@@ -56,7 +73,11 @@
 
 ### `play_orders`：模拟下注订单
 
-字段：`id`（主键）、`user_id`、`lottery_code`、`based_issue`、`selection`（每个位置选号的 JSON）、`bets`（组合注数）、`stake`（扣款金额）、`multiple`、`target_issue`、`ahead`、`target_date`、`deadline_at`（下单时保存的撤销截止时间）、`cancelled_at`、`settled_at`、`prize_credited`、`created_at`。`user_id` 逻辑关联 `users.id`；开奖结算依赖 `draws`。扣款与写单在一个数据库事务中完成；余额调整不会取消订单，也不改历史盈亏。
+字段：`id`（主键）、`user_id`、`lottery_code`、`based_issue`、`selection`（每个位置选号的 JSON）、`bets`（组合注数）、`stake`（扣款金额）、`multiple`、`target_issue`、`ahead`、`target_date`、`deadline_at`（下单时保存的撤销截止时间）、`cancelled_at`、`settled_at`、`prize_credited`、`prize_amount`（兑奖金额，未兑为 -1）、`created_at`。`user_id` 逻辑关联 `users.id`。官方彩种结算依赖 `draws`；`lottery_code = self3d` 的订单依赖该用户的 `self_draws`。扣款与写单在一个数据库事务中完成；余额调整不会取消订单，也不改历史盈亏。
+
+### `user_play_prizes`：按账号覆盖的模拟单注奖金
+
+字段：`user_id`、`lottery_code`、`prize`。主键为 `(user_id, lottery_code)`。没有记录时使用该彩种的默认定额；自开3D默认单注 1040 元。
 
 > 当前表之间主要由应用代码维护逻辑关联，没有声明 SQLite 外键约束。删除账号、开奖或订单时应通过后台分区操作，以免留下孤立记录。
 
@@ -69,6 +90,6 @@
 3. **首页全部统计规则**：删除所有彩种的预设和自定义规则；清理后规则为空，不会自动恢复。若只想删自定义规则，改用“自定义统计规则”，预设规则会保留。
 4. **模拟试玩余额**：清零所有用户余额，保留账号和订单。
 5. **普通用户与自定义角色**：删除普通用户、其会话、关联订单和自定义角色；保留唯一超级管理员及内置角色。
-6. **开奖与同步历史**：最后清空开奖记录、同步日志和官网总期数缓存。该操作不自动删除预测存档，所以如需同时清预测，应先执行第 2 步。
+6. **开奖与同步历史**：最后清空官网开奖记录、同步日志和官网总期数缓存。该操作不删除 `self_draws`、预测存档，所以如需同时清预测，应先执行第 2 步。自开3D的开奖和订单在试玩运营台按用户删除，未兑奖的注会先退回余额。
 
 各分区可独立使用，不必每次都依照完整顺序。执行前请核对确认弹框中的影响说明；不可撤销的数据建议先备份 `data/app.sqlite`。

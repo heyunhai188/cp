@@ -194,7 +194,7 @@ onUnmounted(() => {
             :class="{ on: item.code === overview.lottery.code }"
             @click="switchLottery(item.code)"
           >{{ item.name }}</button>
-          <RouterLink class="btn ghost small" to="/query">开奖查询</RouterLink>
+          <RouterLink class="btn ghost small" :to="{ path: '/query', query: { lottery: overview.lottery.code } }">开奖查询</RouterLink>
         </div>
         <div class="latest">
           <div class="latest-row">

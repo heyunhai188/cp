@@ -21,6 +21,7 @@ const syncing = ref(false);
 const drawing = ref(false);
 const syncNote = ref("");
 const placedNote = ref("");
+const addedNote = ref("");
 const recentOpen = ref(false);
 const reveal = ref(null);
 let spinTimer = 0;
@@ -54,6 +55,7 @@ async function load() {
   error.value = "";
   syncNote.value = "";
   placedNote.value = "";
+  addedNote.value = "";
   try {
     board.value = await request(`/api/play?lottery=${code.value}`);
     emptyPicks(board.value.lottery.digits);
@@ -116,6 +118,32 @@ function addRandom(count) {
   slipOpen.value = true;
 }
 
+function pushCurrentLine() {
+  if (!board.value) return false;
+  if (!hasCurrentSelection.value) {
+    error.value = "请先选择号码，再添加选号。";
+    return false;
+  }
+  const emptyIndex = missingPosition.value;
+  if (emptyIndex >= 0) {
+    error.value = `请先选择第 ${emptyIndex + 1} 位号码。`;
+    return false;
+  }
+  if (lines.value.length >= MAX_LINES) {
+    error.value = `号码明细最多添加 ${MAX_LINES} 组，请先删掉一些号码。`;
+    return false;
+  }
+  lines.value.push({ selection: picks.value.map((bag) => [...bag]) });
+  emptyPicks(board.value.lottery.digits);
+  error.value = "";
+  return true;
+}
+
+function addPick() {
+  if (!pushCurrentLine()) return;
+  addedNote.value = `已加入明细，共 ${lines.value.length} 组。可以继续选号，点选好了再去下注。`;
+}
+
 async function openSlip() {
   if (!board.value?.balance) {
     error.value = "余额不足，暂时无法继续模拟下单。";
@@ -123,14 +151,12 @@ async function openSlip() {
     return;
   }
   if (hasCurrentSelection.value) {
-    const emptyIndex = missingPosition.value;
-    if (emptyIndex >= 0) {
-      error.value = `请先选择第 ${emptyIndex + 1} 位号码。`;
+    if (!pushCurrentLine()) {
       slipOpen.value = false;
       return;
     }
   } else if (!lines.value.length) {
-    error.value = "请先选择号码，再点击选好了。";
+    error.value = "请先添加选号，再点击选好了。";
     slipOpen.value = false;
     return;
   }
@@ -139,17 +165,9 @@ async function openSlip() {
     slipOpen.value = false;
     return;
   }
-  if (hasCurrentSelection.value) {
-    if (lines.value.length >= MAX_LINES) {
-      error.value = `号码明细最多添加 ${MAX_LINES} 组，请先删掉一些号码。`;
-      slipOpen.value = false;
-      return;
-    }
-    lines.value.push({ selection: picks.value.map((bag) => [...bag]) });
-    emptyPicks(board.value.lottery.digits);
-  }
   if (!lines.value.length) return;
   error.value = "";
+  addedNote.value = "";
   try {
     await refreshBalance();
   } catch (err) {
@@ -358,6 +376,7 @@ onUnmounted(stopSpin);
 <template>
   <p v-if="error && !slipOpen" class="banner bet-error" role="alert">{{ error }}</p>
   <p v-else-if="placedNote && !reveal" class="play-toast" role="status">{{ placedNote }}</p>
+  <p v-else-if="addedNote && !slipOpen" class="play-toast" role="status">{{ addedNote }}</p>
   <div class="play-top">
     <div class="play-lotteries">
       <button v-for="item in PLAY_LOTTERIES" :key="item.code" type="button" :class="{ on: item.code === code }" @click="code = item.code">{{ item.name }}</button>
@@ -421,7 +440,8 @@ onUnmounted(stopSpin);
   </section>
   <div class="bet-bar">
     <button class="clear" type="button" @click="clearPicks">清空</button>
-    <span class="sum"><template v-if="hasCurrentSelection && missingPosition >= 0">请补选第 {{ missingPosition + 1 }} 位</template><template v-else-if="lines.length">已选 {{ slipBets }} 注待确认</template><template v-else-if="hasCurrentSelection">已选 {{ bets }} 注，共 {{ stake }} 元</template><template v-else>请先选择号码</template></span>
+    <span class="sum"><template v-if="hasCurrentSelection && missingPosition >= 0">请补选第 {{ missingPosition + 1 }} 位</template><template v-else-if="lines.length && !hasCurrentSelection">明细 {{ lines.length }} 组，共 {{ slipBets }} 注</template><template v-else-if="hasCurrentSelection">当前 {{ bets }} 注<template v-if="lines.length">，明细已有 {{ lines.length }} 组</template></template><template v-else>请先选择号码</template></span>
+    <button class="add" type="button" :disabled="!board" @click="addPick">添加选号</button>
     <button class="ok" type="button" :disabled="!board || saving" @click="openSlip">选好了</button>
   </div>
 

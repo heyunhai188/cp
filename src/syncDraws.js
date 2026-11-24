@@ -4,6 +4,7 @@ import { fetchSportteryPage } from "./sporttery.js";
 import {
   addSyncLog,
   getDraws,
+  retainNewestDraws,
   setRemoteTotal,
   upsertDraws,
 } from "./db.js";
@@ -43,6 +44,7 @@ export async function syncDraws(lotteryCode, mode) {
       fetchPage,
     });
     const written = upsertDraws(lotteryCode, planned.rows);
+    const kept = retainNewestDraws(lotteryCode, 500);
     setRemoteTotal(lotteryCode, planned.total);
     const message = syncMessage(known.size === 0 ? "auto" : safeMode, written, planned);
     addSyncLog({
@@ -55,6 +57,7 @@ export async function syncDraws(lotteryCode, mode) {
     });
     return {
       ...written,
+      removed: kept.removed,
       message,
       totalRemote: planned.total,
       latestDate: planned.rows[0]?.drawDate || "",

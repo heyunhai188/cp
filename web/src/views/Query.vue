@@ -1,11 +1,14 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { request } from "../api.js";
-import { currentLottery } from "../lottery.js";
+import { LOTTERIES, currentLottery } from "../lottery.js";
 import MiniBalls from "../components/MiniBalls.vue";
 
+const route = useRoute();
+const officialCodes = new Set(LOTTERIES.map((item) => item.code));
 const filters = ref({
-  lottery: "",
+  lottery: "fc3d",
   issue: "",
   dateFrom: "",
   dateTo: "",
@@ -20,21 +23,41 @@ const rows = ref([]);
 const total = ref(0);
 const pageSize = ref(20);
 const error = ref("");
-const filtersOpen = ref(false);
 const expandedRow = ref("");
 
-const NAMES = { fc3d: "福彩3D", pl3: "排列三", pl5: "排列五", self3d: "自开3D" };
 const stored = currentLottery();
 const savedFilters = (() => {
   try { return JSON.parse(localStorage.getItem("draws.filters") || "null"); } catch { return null; }
 })();
 if (savedFilters && typeof savedFilters === "object") {
-  for (const key of Object.keys(filters.value)) filters.value[key] = String(savedFilters[key] || "");
-} else if (["fc3d", "pl3", "pl5"].includes(stored)) filters.value.lottery = stored;
+  for (const key of ["issue", "dateFrom", "dateTo", "number"]) filters.value[key] = String(savedFilters[key] || "");
+}
+function linkedLottery() {
+  const code = String(route.query.lottery || "");
+  return officialCodes.has(code) ? code : "";
+}
+function applyLinkedLottery() {
+  const code = linkedLottery();
+  if (!code) return false;
+  filters.value.lottery = code;
+  filters.value.issue = "";
+  filters.value.dateFrom = "";
+  filters.value.dateTo = "";
+  filters.value.number = "";
+  page.value = 1;
+  expandedRow.value = "";
+  return true;
+}
+if (!applyLinkedLottery()) {
+  filters.value.lottery = officialCodes.has(savedFilters?.lottery)
+    ? savedFilters.lottery
+    : (officialCodes.has(stored) ? stored : "fc3d");
+}
 
 function saveFilters() {
   localStorage.setItem("draws.filters", JSON.stringify(filters.value));
   localStorage.setItem("draws.recentLimit", String(recentLimit.value));
+  localStorage.setItem("lottery.code", filters.value.lottery);
 }
 
 function queryString() {
@@ -73,8 +96,20 @@ function search() {
   load();
 }
 
+function switchLottery(code) {
+  if (!officialCodes.has(code) || code === filters.value.lottery) return;
+  filters.value.lottery = code;
+  page.value = 1;
+  expandedRow.value = "";
+  saveFilters();
+  load();
+}
+
 function clearFilters() {
-  filters.value = { lottery: "", issue: "", dateFrom: "", dateTo: "", number: "" };
+  filters.value.issue = "";
+  filters.value.dateFrom = "";
+  filters.value.dateTo = "";
+  filters.value.number = "";
   page.value = 1;
   saveFilters();
   load();
@@ -92,44 +127,57 @@ function goto(next) {
   load();
 }
 
-onMounted(load);
+onMounted(() => {
+  saveFilters();
+  load();
+});
+
+watch(() => route.query.lottery, () => {
+  if (!applyLinkedLottery()) return;
+  saveFilters();
+  load();
+});
 </script>
 
 <template>
   <p v-if="error" class="banner">{{ error }}</p>
-  <header class="page-hero">
-    <p class="lede">{{ counts || "正在读取…" }}</p>
-    <p class="query-current">当前：{{ filters.lottery ? (NAMES[filters.lottery] || filters.lottery) : "全部彩种" }}<span v-if="filters.issue"> · 期号含 {{ filters.issue }}</span><span v-if="filters.number"> · 号码含 {{ filters.number }}</span><span v-if="filters.dateFrom || filters.dateTo"> · {{ filters.dateFrom || "不限开始" }} 至 {{ filters.dateTo || "不限结束" }}</span></p>
-    <button class="btn ghost" type="button" @click="filtersOpen = !filtersOpen">{{ filtersOpen ? "收起筛选" : "筛选" }}</button>
-  </header>
-  <form v-show="filtersOpen" class="panel query-filters" @submit.prevent="search">
-    <label>彩种
-      <select v-model="filters.lottery">
-        <option value="">全部</option>
-        <option value="fc3d">福彩3D</option>
-        <option value="pl3">排列三</option>
-        <option value="pl5">排列五</option>
-        <option value="self3d">自开3D</option>
-      </select>
-    </label>
-    <label>期号
-      <input v-model="filters.issue" inputmode="numeric" placeholder="如 26300" />
-    </label>
-    <label>开始日期
-      <input v-model="filters.dateFrom" type="date" />
-    </label>
-    <label>结束日期
-      <input v-model="filters.dateTo" type="date" />
-    </label>
-    <label>号码
-      <input v-model="filters.number" inputmode="numeric" placeholder="如 398 或 3 9 8" />
-    </label>
-    <p class="quiet">398 表示号码里连续出现 398，不是这一期正好开出 398。</p>
-    <div class="query-actions">
-      <button class="btn gold" type="submit">查询</button>
-      <button class="btn ghost" type="button" @click="clearFilters">清空</button>
+  <header class="page-hero predict-lottery">
+    <p class="lede">先选彩种。展开下面的条件后，可以按期号、日期或号码查询。</p>
+    <div class="lottery-switch" role="group" aria-label="彩种">
+      <button
+        v-for="item in LOTTERIES"
+        :key="item.code"
+        type="button"
+        class="btn ghost small"
+        :class="{ on: item.code === filters.lottery }"
+        :aria-pressed="item.code === filters.lottery"
+        @click="switchLottery(item.code)"
+      >{{ item.name }}</button>
     </div>
-  </form>
+  </header>
+  <p class="quiet">{{ counts || "正在读取…" }}</p>
+  <details class="panel fold query-options">
+    <summary>筛选条件</summary>
+    <form class="query-filters" @submit.prevent="search">
+      <label>期号
+        <input v-model="filters.issue" inputmode="numeric" placeholder="如 26300" />
+      </label>
+      <label>开始日期
+        <input v-model="filters.dateFrom" type="date" />
+      </label>
+      <label>结束日期
+        <input v-model="filters.dateTo" type="date" />
+      </label>
+      <label>号码
+        <input v-model="filters.number" inputmode="numeric" placeholder="如 398 或 3 9 8" />
+      </label>
+      <p class="quiet">398 表示号码里连续出现 398，不是这一期正好开出 398。</p>
+      <div class="query-actions">
+        <button class="btn gold" type="submit">查询</button>
+        <button class="btn ghost" type="button" @click="clearFilters">清空</button>
+      </div>
+    </form>
+  </details>
   <div class="query-range" role="group" aria-label="显示最近多少期">
     <button v-for="option in [{ label: '近10期', value: 10 }, { label: '近30期', value: 30 }, { label: '近100期', value: 100 }, { label: '分页浏览', value: 0 }]" :key="option.value" type="button" class="btn ghost small" :class="{ on: recentLimit === option.value }" @click="chooseRecent(option.value)">{{ option.label }}</button>
   </div>

@@ -270,7 +270,7 @@ input, select {
 .pill { border-radius: 999px; padding: 2px 8px; background: var(--purple-soft); color: var(--purple); font-size: 12px; }
 .text-btn { border: 0; background: transparent; color: var(--purple); }
 
-.query-filters, .admin-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.query-options { margin-bottom: 12px; }
 .query-filters label, .pair label, .login-card label, .field-label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 .query-table, .drawer-body, .predict-ranks { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -411,8 +411,9 @@ th { color: var(--purple-deep); }
   background: var(--brand-gradient);
 }
 .bet-bar .clear { border: 0; background: transparent; color: white; }
-.bet-bar .sum { flex: 1; font-size: 14px; }
-.bet-bar .ok { border: 0; background: var(--card); color: var(--purple); border-radius: 999px; padding: 8px 16px; font-weight: 700; }
+.bet-bar .sum { flex: 1; min-width: 0; font-size: 13px; }
+.bet-bar .add { border: 1px solid rgba(255,255,255,.72); background: transparent; color: white; border-radius: 999px; padding: 8px 10px; white-space: nowrap; }
+.bet-bar .ok { border: 0; background: var(--card); color: var(--purple); border-radius: 999px; padding: 8px 16px; font-weight: 700; white-space: nowrap; }
 .bet-error { position: fixed; z-index: 21; left: 50%; bottom: calc(54px + env(safe-area-inset-bottom) + 52px); transform: translateX(-50%); width: min(456px, calc(100% - 24px)); margin: 0; box-shadow: 0 4px 18px rgba(20, 20, 30, .16); }
 .order { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
 .order header { display: flex; justify-content: space-between; margin-bottom: 6px; }
